@@ -3,17 +3,30 @@ const express = require('express');
 const cors = require('cors');
 const redis = require('redis');
 const axios = require('axios');
+const { initDb } = require('./db');
+const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
+
 const app = express();
 
 // Enable CORS for frontend
 app.use(cors());
 app.use(express.json());
 
+// Initialize database
+initDb();
+
 const client = redis.createClient({ url: 'redis://localhost:6379' });
 client.connect().catch((err) => {
   console.error('Redis connection error:', err.message);
   console.warn('Continuing without Redis cache...');
 });
+
+// Auth routes
+app.use('/api/auth', authRoutes);
+
+// Admin routes
+app.use('/api/admin', adminRoutes);
 
 // Logic: Check Cache -> Fetch API -> Store Cache
 app.get('/api/stock/:symbol', async (req, res) => {
