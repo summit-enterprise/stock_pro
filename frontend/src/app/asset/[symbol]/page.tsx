@@ -1,0 +1,571 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter, useParams } from 'next/navigation';
+import Link from 'next/link';
+import PriceChart from '@/components/PriceChart';
+import AssetNews from '@/components/AssetNews';
+
+interface HistoricalDataPoint {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface AssetData {
+  symbol: string;
+  name: string;
+  type: string;
+  category?: string;
+  exchange: string;
+  currency: string;
+  currentPrice: number | null;
+  priceChange: number;
+  priceChangePercent: number;
+  historicalData: HistoricalDataPoint[];
+  metadata: {
+    marketCap?: number;
+    peRatio?: number;
+    dividendYield?: number;
+  };
+}
+
+export default function AssetDetailPage() {
+  const router = useRouter();
+  const params = useParams();
+  const symbol = params.symbol as string;
+  
+  const [assetData, setAssetData] = useState<AssetData | null>(null);
+  const [allHistoricalData, setAllHistoricalData] = useState<HistoricalDataPoint[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [timeRange, setTimeRange] = useState('1M');
+  const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [inWatchlist, setInWatchlist] = useState(false);
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [ratings, setRatings] = useState<{
+    shortTerm?: { signal: string; strength: number };
+    longTerm?: { signal: string; strength: number };
+  } | null>(null);
+  const [ratingsLoading, setRatingsLoading] = useState(false);
+
+  // Fetch all 5 years of data on initial load
+  useEffect(() => {
+    if (symbol) {
+      fetchAllAssetData();
+      checkWatchlistStatus();
+    }
+  }, [symbol]);
+
+  // Fetch ratings after asset data is loaded (to check category)
+  useEffect(() => {
+    if (assetData) {
+      fetchRatings();
+    }
+  }, [assetData]);
+
+  const fetchRatings = async () => {
+    // Only fetch ratings for equities
+    if (!assetData || assetData.category?.toLowerCase() !== 'equities') {
+      setRatingsLoading(false);
+      return;
+    }
+
+    setRatingsLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3001/api/ratings/${symbol}`, {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Only set ratings if they exist (not null)
+        if (data.shortTerm || data.longTerm) {
+          setRatings({
+            shortTerm: data.shortTerm,
+            longTerm: data.longTerm,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching ratings:', error);
+    } finally {
+      setRatingsLoading(false);
+    }
+  };
+
+  const checkWatchlistStatus = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const response = await fetch(`http://localhost:3001/api/watchlist/check/${symbol}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setInWatchlist(data.inWatchlist);
+      }
+    } catch (error) {
+      console.error('Error checking watchlist status:', error);
+    }
+  };
+
+  const handleWatchlistToggle = async () => {
+    setWatchlistLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Please log in to add assets to your watchlist');
+        return;
+      }
+
+      if (inWatchlist) {
+        // Remove from watchlist
+        const response = await fetch(`http://localhost:3001/api/watchlist/${symbol}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          setInWatchlist(false);
+        }
+      } else {
+        // Add to watchlist
+        const response = await fetch('http://localhost:3001/api/watchlist', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ symbol }),
+        });
+
+        if (response.ok) {
+          setInWatchlist(true);
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling watchlist:', error);
+    } finally {
+      setWatchlistLoading(false);
+    }
+  };
+
+  const fetchAllAssetData = async () => {
+    setLoading(true);
+    setError('');
+    
+    try {
+      // Always fetch 5Y range to get all available data
+      const response = await fetch(
+        `http://localhost:3001/api/asset/${symbol}?range=5Y`
+      );
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch asset data');
+      }
+      
+      const data = await response.json();
+      
+      // Store all historical data - always pass ALL data to chart
+      setAllHistoricalData(data.historicalData);
+      
+      // Set asset data with ALL historical data (chart will handle zooming)
+      setAssetData({
+        ...data,
+        historicalData: data.historicalData // Always pass all data
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load asset data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const timeRanges = [
+    { label: '1D', value: '1D' },
+    { label: '1W', value: '1W' },
+    { label: '1M', value: '1M' },
+    { label: '3M', value: '3M' },
+    { label: '6M', value: '6M' },
+    { label: '1Y', value: '1Y' },
+    { label: '5Y', value: '5Y' },
+  ];
+
+  const formatPrice = (price: number | null) => {
+    if (price === null) return 'N/A';
+    return `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const getRatingColor = (signal: string) => {
+    switch (signal) {
+      case 'Strong Buy':
+        return 'text-green-600 dark:text-green-400';
+      case 'Buy':
+        return 'text-green-500 dark:text-green-500';
+      case 'Hold':
+        return 'text-yellow-600 dark:text-yellow-400';
+      case 'Sell':
+        return 'text-red-500 dark:text-red-500';
+      case 'Strong Sell':
+        return 'text-red-600 dark:text-red-400';
+      default:
+        return 'text-gray-600 dark:text-gray-400';
+    }
+  };
+
+  const getRatingIcon = (signal: string) => {
+    switch (signal) {
+      case 'Strong Buy':
+        return '🟢';
+      case 'Buy':
+        return '🟢';
+      case 'Hold':
+        return '🟡';
+      case 'Sell':
+        return '🔴';
+      case 'Strong Sell':
+        return '🔴';
+      default:
+        return '⚪';
+    }
+  };
+
+  const handleTabClick = (tab: string) => {
+    if (tab === 'News') {
+      // Scroll to news section
+      setTimeout(() => {
+        const newsSection = document.getElementById('asset-news-section');
+        if (newsSection) {
+          const offset = 100; // Offset for fixed navbar
+          const elementPosition = newsSection.getBoundingClientRect().top;
+          const offsetPosition = elementPosition + window.pageYOffset - offset;
+          window.scrollTo({
+            top: offsetPosition,
+            behavior: 'smooth'
+          });
+        }
+      }, 100);
+      setActiveTab('News');
+    } else {
+      // For other tabs, we'll implement content switching later
+      setActiveTab(tab);
+    }
+  };
+
+  // Define all possible tabs
+  const allNavTabs = [
+    { id: 'Filings', label: 'Filings', icon: '📄' },
+    { id: 'Earnings', label: 'Earnings', icon: '💰' },
+    { id: 'Financials', label: 'Financials', icon: '📈' },
+    { id: 'News', label: 'News', icon: '📰' },
+    { id: 'Analysts', label: 'Analysts', icon: '🎯' },
+    { id: 'Holdings', label: 'Holdings', icon: '💼' },
+    { id: 'Dividends', label: 'Dividends', icon: '💰' },
+  ];
+
+  // Filter tabs based on asset category
+  // For crypto assets, remove Filings, Earnings, Analysts, and Dividends
+  const navTabs = assetData?.category?.toLowerCase() === 'crypto'
+    ? allNavTabs.filter(tab => 
+        !['Filings', 'Earnings', 'Analysts', 'Dividends'].includes(tab.id)
+      )
+    : allNavTabs;
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-black pt-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="animate-pulse">
+            <div className="h-8 bg-gray-200 dark:bg-zinc-800 rounded w-64 mb-6"></div>
+            <div className="h-12 bg-gray-200 dark:bg-zinc-800 rounded w-48 mb-8"></div>
+            <div className="h-96 bg-gray-200 dark:bg-zinc-800 rounded mb-8"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !assetData) {
+    return (
+      <div className="min-h-screen bg-white dark:bg-black pt-16">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <Link href="/dashboard" className="text-blue-600 dark:text-blue-400 hover:underline mb-4 inline-block">
+            ← Back to Dashboard
+          </Link>
+          <div className="bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-300 rounded-lg p-4">
+            {error || 'Asset not found'}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-white dark:bg-black pt-16">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Back Button */}
+        <Link 
+          href="/dashboard" 
+          className="text-blue-600 dark:text-blue-400 hover:underline mb-6 inline-block"
+        >
+          ← Back to Dashboard
+        </Link>
+
+        {/* Asset Header */}
+        <div className="mb-6">
+          <div className="flex items-start justify-between mb-2">
+            <div className="flex-1">
+              <div className="mb-2">
+                <div className="flex items-center gap-3 mb-2">
+                  <h1 className="text-4xl font-bold text-gray-900 dark:text-white">
+                    {assetData.name}
+                  </h1>
+                  {/* Rating Icons */}
+                  {!ratingsLoading && (ratings?.shortTerm || ratings?.longTerm) && (
+                    <div className="flex items-center gap-2 ml-2">
+                      {/* Short-term rating */}
+                      {ratings.shortTerm && (
+                        <div 
+                          className="flex items-center gap-1" 
+                          title={`Short-term: ${ratings.shortTerm.signal}`}
+                        >
+                          <span className="text-xl">{getRatingIcon(ratings.shortTerm.signal)}</span>
+                          <span className={`text-xs font-medium ${getRatingColor(ratings.shortTerm.signal)}`}>
+                            ST
+                          </span>
+                        </div>
+                      )}
+                      {/* Long-term rating */}
+                      {ratings.longTerm && (
+                        <div 
+                          className="flex items-center gap-1" 
+                          title={`Long-term: ${ratings.longTerm.signal}`}
+                        >
+                          <span className="text-xl">{getRatingIcon(ratings.longTerm.signal)}</span>
+                          <span className={`text-xs font-medium ${getRatingColor(ratings.longTerm.signal)}`}>
+                            LT
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {/* Rating Labels */}
+                {!ratingsLoading && (ratings?.shortTerm || ratings?.longTerm) && (
+                  <div className="flex items-center gap-4 text-sm">
+                    {ratings.shortTerm && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-600 dark:text-gray-400 font-medium">Short Term:</span>
+                        <span className="text-lg">{getRatingIcon(ratings.shortTerm.signal)}</span>
+                        <span className={`font-semibold ${getRatingColor(ratings.shortTerm.signal)}`}>
+                          {ratings.shortTerm.signal}
+                        </span>
+                      </div>
+                    )}
+                    {ratings.longTerm && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-600 dark:text-gray-400 font-medium">Long Term:</span>
+                        <span className="text-lg">{getRatingIcon(ratings.longTerm.signal)}</span>
+                        <span className={`font-semibold ${getRatingColor(ratings.longTerm.signal)}`}>
+                          {ratings.longTerm.signal}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <p className="text-lg text-gray-600 dark:text-gray-400">
+                {assetData.exchange}:{assetData.symbol}
+              </p>
+            </div>
+            {/* Watchlist Icon */}
+            <button
+              onClick={handleWatchlistToggle}
+              disabled={watchlistLoading}
+              className={`p-3 rounded-full transition-all ${
+                inWatchlist
+                  ? 'bg-blue-600 text-white hover:bg-blue-700'
+                  : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-zinc-700'
+              } ${watchlistLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              title={inWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
+            >
+              {inWatchlist ? (
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                </svg>
+              ) : (
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                </svg>
+              )}
+            </button>
+          </div>
+          
+          {/* Navigation Tabs - Pills Style (Option C) */}
+          <div className="flex flex-wrap gap-2 border-b border-gray-200 dark:border-zinc-700 pb-4">
+            {navTabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => handleTabClick(tab.id)}
+                className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                  activeTab === tab.id
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-zinc-700'
+                }`}
+              >
+                <span className="mr-1.5">{tab.icon}</span>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Current Price Section */}
+        <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6 mb-8">
+          <div className="flex items-baseline gap-4 mb-2">
+            <span className="text-4xl font-bold text-gray-900 dark:text-white">
+              {formatPrice(assetData.currentPrice)}
+            </span>
+            <span className={`text-xl font-semibold ${
+              assetData.priceChange >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+            }`}>
+              {assetData.priceChange >= 0 ? '+' : ''}{assetData.priceChange.toFixed(2)} 
+              ({assetData.priceChangePercent >= 0 ? '+' : ''}{assetData.priceChangePercent.toFixed(2)}%)
+            </span>
+          </div>
+          {assetData.metadata.marketCap && (
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Market Cap: ${(assetData.metadata.marketCap / 1e9).toFixed(2)}B
+            </p>
+          )}
+        </div>
+
+        {/* Time Range Selector */}
+        <div className="mb-6">
+          <div className="flex gap-2 flex-wrap">
+            {timeRanges.map((range) => (
+              <button
+                key={range.value}
+                onClick={() => setTimeRange(range.value)}
+                className={`px-4 py-2 rounded-lg transition-colors ${
+                  timeRange === range.value
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-zinc-700'
+                }`}
+              >
+                {range.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Price Chart */}
+        <div className="mb-8">
+          <PriceChart 
+            data={assetData.historicalData} 
+            symbol={assetData.symbol}
+            timeRange={timeRange}
+          />
+        </div>
+
+        {/* Key Metrics */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          {assetData.historicalData.length > 0 && (
+            <>
+              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Open</p>
+                <p className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {formatPrice(assetData.historicalData[assetData.historicalData.length - 1].open)}
+                </p>
+              </div>
+              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">High</p>
+                <p className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {formatPrice(assetData.historicalData[assetData.historicalData.length - 1].high)}
+                </p>
+              </div>
+              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Low</p>
+                <p className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {formatPrice(assetData.historicalData[assetData.historicalData.length - 1].low)}
+                </p>
+              </div>
+              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Volume</p>
+                <p className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {assetData.historicalData[assetData.historicalData.length - 1].volume.toLocaleString()}
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Historical Data Table */}
+        {assetData.historicalData.length > 0 && (
+          <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
+              Historical Data
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-300 dark:border-zinc-700">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Date</th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Open</th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">High</th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Low</th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Close</th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-700 dark:text-gray-300">Volume</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {assetData.historicalData.slice(-10).reverse().map((point, index) => (
+                    <tr key={index} className="border-b border-gray-200 dark:border-zinc-800">
+                      <td className="py-3 px-4 text-sm text-gray-900 dark:text-white">
+                        {new Date(point.timestamp).toLocaleDateString()}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-right text-gray-900 dark:text-white">
+                        {formatPrice(point.open)}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-right text-green-600 dark:text-green-400">
+                        {formatPrice(point.high)}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-right text-red-600 dark:text-red-400">
+                        {formatPrice(point.low)}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-right text-gray-900 dark:text-white">
+                        {formatPrice(point.close)}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-right text-gray-600 dark:text-gray-400">
+                        {point.volume.toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Asset-Specific News Section */}
+        <div className="mt-12">
+          <AssetNews symbol={assetData.symbol} />
+        </div>
+      </div>
+    </div>
+  );
+}
+

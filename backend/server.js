@@ -6,6 +6,28 @@ const axios = require('axios');
 const { initDb } = require('./db');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
+const searchRoutes = require('./routes/search');
+const marketRoutes = require('./routes/market');
+const assetRoutes = require('./routes/asset');
+const watchlistRoutes = require('./routes/watchlist');
+const portfolioRoutes = require('./routes/portfolio');
+const newsRoutes = require('./routes/news');
+const userRoutes = require('./routes/user');
+const ratingsRoutes = require('./routes/ratings');
+
+// Determine if we should use mock data
+const USE_MOCK_DATA = process.env.NODE_ENV !== 'production' && process.env.USE_MOCK_DATA !== 'false';
+
+// Log environment info
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+console.log(`Using Mock Data: ${USE_MOCK_DATA ? '✅ YES' : '❌ NO (Real API)'}`);
+if (USE_MOCK_DATA) {
+  console.log('📊 Mock data service is active - no API key required');
+} else {
+  console.log('🌐 Using Polygon.io API - POLYGON_API_KEY required');
+}
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
 const app = express();
 
@@ -15,6 +37,20 @@ app.use(express.json());
 
 // Initialize database
 initDb();
+
+// Start news background services
+const newsService = require('./services/newsService');
+const assetNewsService = require('./services/assetNewsService');
+const ratingsService = require('./services/ratingsService');
+
+// Start category-based news service (market, crypto, world, US)
+newsService.startNewsService(2.5); // Refresh every 2.5 hours
+
+// Start asset-specific news service (for individual assets)
+assetNewsService.startAssetNewsService(2.5); // Refresh every 2.5 hours
+
+// Start ratings service (refreshes analyst ratings)
+ratingsService.startRatingsService(12); // Refresh every 12 hours
 
 const client = redis.createClient({ url: 'redis://localhost:6379' });
 client.connect().catch((err) => {
@@ -27,6 +63,30 @@ app.use('/api/auth', authRoutes);
 
 // Admin routes
 app.use('/api/admin', adminRoutes);
+
+// Search routes
+app.use('/api/search', searchRoutes);
+
+// Market routes
+app.use('/api/market', marketRoutes);
+
+// Asset routes
+app.use('/api/asset', assetRoutes);
+
+// Watchlist routes
+app.use('/api/watchlist', watchlistRoutes);
+
+// Portfolio routes
+app.use('/api/portfolio', portfolioRoutes);
+
+// News routes
+app.use('/api/news', newsRoutes);
+
+// User routes
+app.use('/api/user', userRoutes);
+
+// Ratings routes
+app.use('/api/ratings', ratingsRoutes);
 
 // Logic: Check Cache -> Fetch API -> Store Cache
 app.get('/api/stock/:symbol', async (req, res) => {

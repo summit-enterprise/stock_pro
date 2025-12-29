@@ -4,8 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "NODE_ENV=production node server.js",
+    "dev": "NODE_ENV=development node server.js",
     "create-superuser": "node scripts/createSuperuser.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
