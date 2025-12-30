@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const mockData = require('../services/mockData');
+const mockData = require('../services/utils/mockData');
 const router = express.Router();
 
 // Check if we should use mock data

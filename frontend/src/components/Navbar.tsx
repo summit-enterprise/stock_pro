@@ -12,13 +12,27 @@ export default function Navbar() {
   const [showRegister, setShowRegister] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
     // Check if user is logged in (regular user or admin)
     const checkAuth = () => {
       const token = localStorage.getItem('token');
-      const adminToken = localStorage.getItem('admin_token');
+      const adminToken = localStorage.getItem('adminToken'); // Fixed: was 'admin_token'
+      const userStr = localStorage.getItem('user');
+      
       setIsAuthenticated(!!token || !!adminToken);
+      
+      // Load user data if available
+      if (userStr) {
+        try {
+          setUser(JSON.parse(userStr));
+        } catch (e) {
+          setUser(null);
+        }
+      } else {
+        setUser(null);
+      }
     };
 
     checkAuth();
@@ -133,18 +147,26 @@ export default function Navbar() {
   };
 
   const handleHomeNavigation = () => {
-    const adminToken = localStorage.getItem('admin_token');
-    const adminUser = localStorage.getItem('admin_user');
+    const adminToken = localStorage.getItem('adminToken');
     const regularUser = localStorage.getItem('user');
     
     // Check if user is admin/superuser
-    if (adminToken && adminUser) {
-      router.push('/admin/home');
+    if (adminToken && regularUser) {
+      try {
+        const user = JSON.parse(regularUser);
+        if (user.is_admin || user.is_superuser) {
+          router.push('/admin');
+        } else {
+          router.push('/dashboard');
+        }
+      } catch {
+        router.push('/dashboard');
+      }
     } else if (regularUser) {
       try {
         const user = JSON.parse(regularUser);
         if (user.is_admin || user.is_superuser) {
-          router.push('/admin/home');
+          router.push('/admin');
         } else {
           router.push('/dashboard');
         }
@@ -158,8 +180,7 @@ export default function Navbar() {
 
   const handleLogout = () => {
     // Clear both admin and regular user sessions completely
-    localStorage.removeItem('admin_token');
-    localStorage.removeItem('admin_user');
+    localStorage.removeItem('adminToken');
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setIsAuthenticated(false);
@@ -232,6 +253,26 @@ export default function Navbar() {
 
               {isAuthenticated ? (
                 <>
+                  {user && (
+                    <span className="text-sm text-gray-600 dark:text-gray-400 px-2">
+                      {user.email}
+                      {user.is_superuser ? (
+                        <span className="ml-1 text-purple-600 dark:text-purple-400">(Superuser)</span>
+                      ) : user.is_admin ? (
+                        <span className="ml-1 text-blue-600 dark:text-blue-400">(Admin)</span>
+                      ) : (
+                        <span className="ml-1 text-gray-500 dark:text-gray-500">(User)</span>
+                      )}
+                    </span>
+                  )}
+                  {(user?.is_admin || user?.is_superuser) && (
+                    <button
+                      onClick={() => router.push('/admin')}
+                      className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                    >
+                      Admin
+                    </button>
+                  )}
                   <button
                     onClick={handleHomeNavigation}
                     className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"

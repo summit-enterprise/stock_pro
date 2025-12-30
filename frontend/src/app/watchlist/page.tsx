@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
@@ -22,6 +22,15 @@ interface WatchlistItem {
   };
 }
 
+interface SearchResult {
+  symbol: string;
+  name: string;
+  market: string;
+  type: string;
+  exchange: string;
+  currency: string;
+}
+
 export default function WatchlistPage() {
   const router = useRouter();
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
@@ -29,10 +38,93 @@ export default function WatchlistPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchWatchlist();
   }, []);
+
+  // Fetch search results when typing
+  useEffect(() => {
+    if (searchQuery.length >= 1) {
+      const debounceTimer = setTimeout(() => {
+        fetchSearchResults(searchQuery);
+      }, 300);
+      return () => clearTimeout(debounceTimer);
+    } else {
+      setSearchResults([]);
+      setShowSearchResults(false);
+    }
+  }, [searchQuery]);
+
+  // Close search dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setShowSearchResults(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const fetchSearchResults = async (query: string) => {
+    setSearchLoading(true);
+    try {
+      const response = await fetch(
+        `http://localhost:3001/api/search/autocomplete?query=${encodeURIComponent(query)}`
+      );
+      const data = await response.json();
+      // Get current watchlist symbols to filter results
+      const watchlistSymbols = new Set(watchlist.map(item => item.symbol));
+      const filtered = (data.results || []).filter((result: SearchResult) => 
+        !watchlistSymbols.has(result.symbol)
+      );
+      setSearchResults(filtered);
+      setShowSearchResults(filtered.length > 0);
+    } catch (error) {
+      console.error('Error fetching search results:', error);
+      setSearchResults([]);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const handleAddToWatchlist = async (result: SearchResult, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Please log in to add assets to your watchlist');
+        return;
+      }
+
+      const response = await fetch('http://localhost:3001/api/watchlist', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ symbol: result.symbol }),
+      });
+
+      if (response.ok) {
+        // Refresh watchlist
+        await fetchWatchlist();
+        // Remove from search results
+        setSearchResults(searchResults.filter(r => r.symbol !== result.symbol));
+        if (searchResults.length === 1) {
+          setShowSearchResults(false);
+        }
+      }
+    } catch (error) {
+      console.error('Error adding to watchlist:', error);
+      alert('Failed to add to watchlist. Please try again.');
+    }
+  };
 
   const fetchWatchlist = async () => {
     try {
@@ -196,14 +288,60 @@ export default function WatchlistPage() {
         </div>
 
         {/* Search Bar */}
-        <div className="mb-6">
+        <div className="mb-6 relative" ref={searchRef}>
           <input
             type="text"
-            placeholder="Search by symbol or company name..."
+            placeholder="Search assets to add to watchlist..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              if (e.target.value.length > 0) {
+                setShowSearchResults(true);
+              }
+            }}
+            onFocus={() => {
+              if (searchResults.length > 0) {
+                setShowSearchResults(true);
+              }
+            }}
             className="w-full md:w-96 px-4 py-2 border border-gray-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          {/* Search Results Dropdown */}
+          {showSearchResults && searchResults.length > 0 && (
+            <div className="absolute z-50 w-full md:w-96 mt-1 bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg shadow-lg max-h-96 overflow-y-auto">
+              {searchLoading ? (
+                <div className="p-4 text-center text-gray-600 dark:text-gray-400">
+                  Searching...
+                </div>
+              ) : (
+                <div className="py-2">
+                  {searchResults.map((result) => (
+                    <div
+                      key={result.symbol}
+                      className="px-4 py-3 hover:bg-gray-100 dark:hover:bg-zinc-700 flex items-center justify-between cursor-pointer"
+                      onClick={() => router.push(`/asset/${result.symbol}`)}
+                    >
+                      <div className="flex-1">
+                        <div className="font-semibold text-gray-900 dark:text-white">
+                          {result.name}
+                        </div>
+                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                          {result.symbol} • {result.exchange} • {result.type}
+                        </div>
+                      </div>
+                      <button
+                        onClick={(e) => handleAddToWatchlist(result, e)}
+                        className="ml-4 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
+                        title="Add to watchlist"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Watchlist Table */}

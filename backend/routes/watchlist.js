@@ -20,26 +20,11 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// Check if symbol is in watchlist
-router.get('/check/:symbol', verifyToken, async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    const result = await pool.query(
-      'SELECT symbol FROM watchlist WHERE user_id = $1 AND symbol = $2',
-      [req.userId, symbol]
-    );
-    res.json({ inWatchlist: result.rows.length > 0 });
-  } catch (error) {
-    console.error('Check watchlist error:', error);
-    res.status(500).json({ error: 'Internal server error', message: error.message });
-  }
-});
-
 // Get user's watchlist
 router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT w.symbol, ai.name, ai.type, ai.category, ai.exchange, w.added_at
+      `SELECT w.symbol, ai.name, ai.type, ai.exchange, ai.logo_url
        FROM watchlist w
        LEFT JOIN asset_info ai ON w.symbol = ai.symbol
        WHERE w.user_id = $1
@@ -55,12 +40,13 @@ router.get('/', verifyToken, async (req, res) => {
           
           if (USE_MOCK_DATA) {
             // Use mock data
-            const mockData = require('../services/mockData');
+            const mockData = require('../services/utils/mockData');
             const priceData = mockData.getCurrentPrice(row.symbol);
             return {
               symbol: row.symbol,
               name: row.name || row.symbol,
-              category: row.category,
+              type: row.type,
+              logoUrl: row.logo_url || null,
               price: priceData.price,
               change: priceData.change,
               changePercent: priceData.changePercent,
@@ -72,7 +58,6 @@ router.get('/', verifyToken, async (req, res) => {
             return {
               symbol: row.symbol,
               name: row.name || row.symbol,
-              category: row.category,
               price: 0,
               change: 0,
               changePercent: 0,
@@ -98,7 +83,8 @@ router.get('/', verifyToken, async (req, res) => {
             return {
               symbol: row.symbol,
               name: row.name || row.symbol,
-              category: row.category,
+              type: row.type,
+              logoUrl: row.logo_url || null,
               price: currentPrice,
               change: change,
               changePercent: changePercent,
@@ -111,7 +97,8 @@ router.get('/', verifyToken, async (req, res) => {
         return {
           symbol: row.symbol,
           name: row.name || row.symbol,
-          category: row.category,
+          type: row.type,
+          logoUrl: row.logo_url || null,
           price: 0,
           change: 0,
           changePercent: 0,
@@ -160,6 +147,23 @@ router.delete('/:symbol', verifyToken, async (req, res) => {
     res.json({ message: 'Removed from watchlist' });
   } catch (error) {
     console.error('Remove from watchlist error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Check if symbol is in watchlist
+router.get('/check/:symbol', verifyToken, async (req, res) => {
+  try {
+    const { symbol } = req.params;
+
+    const result = await pool.query(
+      'SELECT EXISTS(SELECT 1 FROM watchlist WHERE user_id = $1 AND symbol = $2) as in_watchlist',
+      [req.userId, symbol]
+    );
+
+    res.json({ inWatchlist: result.rows[0].in_watchlist });
+  } catch (error) {
+    console.error('Check watchlist error:', error);
     res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });

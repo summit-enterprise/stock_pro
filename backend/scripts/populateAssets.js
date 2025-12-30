@@ -7,8 +7,8 @@
 
 require('dotenv').config();
 const { pool } = require('../db');
-const { generateAssetList } = require('../services/assetGenerator');
-const { generateHistoricalData, BASE_PRICES } = require('../services/mockData');
+const { generateAssetList } = require('../services/utils/assetGenerator');
+const { generateHistoricalData, BASE_PRICES } = require('../services/utils/mockData');
 
 async function populateAssets() {
   try {

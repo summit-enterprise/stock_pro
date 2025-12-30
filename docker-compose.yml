@@ -1,21 +1,14 @@
 services:
   postgres:
-    # Using TimescaleDB for time-series optimization (90%+ compression, 10-100x faster queries)
-    # Regular postgres:15 can be used if TimescaleDB is not needed
-    image: timescale/timescaledb:latest-pg16
+    image: postgres:15
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: stockdb
     ports:
       - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
 
   redis:
     image: redis:alpine
     ports:
       - "6379:6379"
-
-volumes:
-  postgres_data:

@@ -25,6 +25,7 @@ export default function Sidebar() {
     { icon: '🎴', label: 'Alternative', path: '/alternative' },
     { icon: '🔔', label: 'Alerts', path: '/alerts' },
     { icon: '📰', label: 'News', path: '/news' },
+    { icon: '📺', label: 'Live Streams', path: '/live-streams' },
     { icon: '⚙️', label: 'Settings', path: '/settings' },
   ];
 

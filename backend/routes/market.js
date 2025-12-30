@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const redis = require('redis');
 const { pool } = require('../db');
-const mockData = require('../services/mockData');
+const mockData = require('../services/utils/mockData');
 const router = express.Router();
 
 // Redis client for caching
@@ -67,14 +67,14 @@ router.get('/overview', async (req, res) => {
 
     // Define assets to fetch
     const assets = [
-      // Indices
-      { symbol: 'SPY', name: 'S&P 500', type: 'index' },
-      { symbol: 'DIA', name: 'Dow Jones', type: 'index' },
-      { symbol: 'QQQ', name: 'NASDAQ', type: 'index' },
-      { symbol: 'IWM', name: 'Russell 2000', type: 'index' },
-      { symbol: 'EWU', name: 'FTSE 100', type: 'index' },
-      { symbol: 'EWJ', name: 'Nikkei 225', type: 'index' },
-      { symbol: 'EWC', name: 'S&P/TSX 60', type: 'index' },
+      // Indices (actual index symbols, not ETFs)
+      { symbol: '^GSPC', name: 'S&P 500', type: 'index', category: 'index' },
+      { symbol: '^DJI', name: 'Dow Jones Industrial Average', type: 'index', category: 'index' },
+      { symbol: '^IXIC', name: 'NASDAQ Composite', type: 'index', category: 'index' },
+      { symbol: '^RUT', name: 'Russell 2000', type: 'index', category: 'index' },
+      { symbol: '^FTSE', name: 'FTSE 100', type: 'index', category: 'index' },
+      { symbol: '^N225', name: 'Nikkei 225', type: 'index', category: 'index' },
+      { symbol: '^GSPTSE', name: 'S&P/TSX 60', type: 'index', category: 'index' },
       // Crypto
       { symbol: 'X:BTCUSD', name: 'Bitcoin', type: 'crypto' },
       { symbol: 'X:ETHUSD', name: 'Ethereum', type: 'crypto' },

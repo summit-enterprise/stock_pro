@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
-const ratingsService = require('../services/ratingsService');
+const { ratingsService } = require('../services');
 const router = express.Router();
 
 // Middleware to verify user token (optional for ratings)

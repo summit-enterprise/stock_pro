@@ -494,5 +494,101 @@ router.post('/create-admin', requireSuperuser, async (req, res) => {
   }
 });
 
+// GCP Billing and Usage routes
+const { gcpBillingService: billingService } = require('../services');
+
+/**
+ * Get billing usage data
+ * GET /api/admin/billing/usage
+ */
+router.get('/billing/usage', requireAdmin, async (req, res) => {
+  try {
+    const { serviceName, startDate, endDate, projectId } = req.query;
+    
+    // Default to last 30 days if no dates provided
+    const end = endDate || new Date().toISOString().split('T')[0];
+    const start = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const filters = {
+      serviceName,
+      startDate: start,
+      endDate: end,
+      projectId,
+    };
+
+    const data = await billingService.getBillingUsageFromDB(filters);
+    res.json({ success: true, data, filters });
+  } catch (error) {
+    console.error('Billing usage error:', error);
+    res.status(500).json({ error: 'Failed to fetch billing usage', message: error.message });
+  }
+});
+
+/**
+ * Get aggregated billing data
+ * GET /api/admin/billing/aggregates
+ */
+router.get('/billing/aggregates', requireAdmin, async (req, res) => {
+  try {
+    const { serviceName, startDate, endDate, projectId } = req.query;
+    
+    // Default to last 30 days if no dates provided
+    const end = endDate || new Date().toISOString().split('T')[0];
+    const start = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const filters = {
+      serviceName,
+      startDate: start,
+      endDate: end,
+      projectId,
+    };
+
+    const data = await billingService.getAggregatedBilling(filters);
+    res.json({ success: true, data, filters });
+  } catch (error) {
+    console.error('Billing aggregates error:', error);
+    res.status(500).json({ error: 'Failed to fetch billing aggregates', message: error.message });
+  }
+});
+
+/**
+ * Get service list
+ * GET /api/admin/billing/services
+ */
+router.get('/billing/services', requireAdmin, async (req, res) => {
+  try {
+    const services = await billingService.getServiceList();
+    res.json({ success: true, services });
+  } catch (error) {
+    console.error('Service list error:', error);
+    res.status(500).json({ error: 'Failed to fetch service list', message: error.message });
+  }
+});
+
+/**
+ * Sync billing data from GCP
+ * POST /api/admin/billing/sync
+ */
+router.post('/billing/sync', requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    
+    // Default to last 30 days if no dates provided
+    const end = endDate || new Date().toISOString().split('T')[0];
+    const start = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const data = await billingService.fetchAndSyncBilling(start, end);
+    res.json({ 
+      success: true, 
+      message: `Synced ${data.length} billing records`,
+      recordCount: data.length,
+      dateRange: { start, end }
+    });
+  } catch (error) {
+    console.error('Billing sync error:', error);
+    res.status(500).json({ error: 'Failed to sync billing data', message: error.message });
+  }
+});
+
 module.exports = router;
 

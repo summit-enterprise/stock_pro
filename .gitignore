@@ -63,3 +63,9 @@ logs
 *.tmp
 *.temp
 .cache/
+
+# Google Cloud Storage temp files
+backend/temp/
+backend/temp/**/*
+
+# Note: documentation/ folder is intentionally tracked

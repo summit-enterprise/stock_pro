@@ -1,7 +1,15 @@
 const express = require('express');
 const axios = require('axios');
 const { pool } = require('../db');
-const mockData = require('../services/mockData');
+const { 
+  mockData, 
+  logoService, 
+  cryptoService, 
+  cryptoPriceService,
+  dividendService,
+  filingsService,
+  analystRatingsService
+} = require('../services');
 const router = express.Router();
 
 // Check if we should use mock data
@@ -16,7 +24,11 @@ router.get('/:symbol', async (req, res) => {
     const { symbol } = req.params;
     const { range = '1M' } = req.query; // Default to 1 month
 
-    if (!USE_MOCK_DATA && !process.env.POLYGON_API_KEY) {
+    // Check if this is a crypto symbol (format: X:SYMBOLUSD)
+    const isCrypto = symbol.startsWith('X:') && symbol.endsWith('USD');
+    
+    // Only require POLYGON_API_KEY for non-crypto assets
+    if (!USE_MOCK_DATA && !isCrypto && !process.env.POLYGON_API_KEY) {
       return res.status(500).json({ 
         error: 'Server configuration error', 
         message: 'POLYGON_API_KEY environment variable is not set' 
@@ -99,7 +111,41 @@ router.get('/:symbol', async (req, res) => {
         v: mockPrice.volume,
       };
       assetInfo = mockData.getMockAssetInfo(symbol);
+    } else if (isCrypto) {
+      // Handle crypto assets using CoinGecko
+      try {
+        // cryptoService already imported from services/index
+        
+        // Get coin ID from database
+        const coinIdResult = await pool.query(
+          'SELECT coin_id FROM crypto_coin_ids WHERE symbol = $1',
+          [symbol]
+        );
+        
+        if (coinIdResult.rows.length > 0) {
+          const coinId = coinIdResult.rows[0].coin_id;
+          const symbolMatch = symbol.match(/^X:(\w+)USD$/);
+          const cryptoSymbol = symbolMatch ? symbolMatch[1] : symbol;
+          
+          // Fetch current price
+          const priceData = await cryptoPriceService.fetchCurrentPrice(coinId, cryptoSymbol);
+          if (priceData) {
+            currentPrice = priceData.price;
+            latestData = {
+              c: priceData.price,
+              o: priceData.price * (1 - (priceData.priceChange24h / 100) / 2),
+              h: priceData.price * (1 + Math.abs(priceData.priceChange24h / 100) / 2),
+              l: priceData.price * (1 - Math.abs(priceData.priceChange24h / 100) / 2),
+              v: priceData.volume24h || 0,
+            };
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching crypto data for ${symbol}:`, error.message);
+        // Continue with historical data from DB if available
+      }
     } else {
+      // Handle equity assets using Polygon
       try {
         // Get previous close (current price)
         const prevUrl = `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?apiKey=${process.env.POLYGON_API_KEY}`;
@@ -182,7 +228,54 @@ router.get('/:symbol', async (req, res) => {
             close: parseFloat(row.close),
             volume: parseInt(row.volume) || 0
           }));
+        } else if (isCrypto) {
+          // Handle crypto historical data using CoinGecko
+          try {
+            // cryptoPriceService already imported from services/index
+            
+            // Get coin ID from database
+            const coinIdResult = await pool.query(
+              'SELECT coin_id FROM crypto_coin_ids WHERE symbol = $1',
+              [symbol]
+            );
+            
+            if (coinIdResult.rows.length > 0) {
+              const coinId = coinIdResult.rows[0].coin_id;
+              const symbolMatch = symbol.match(/^X:(\w+)USD$/);
+              const cryptoSymbol = symbolMatch ? symbolMatch[1] : symbol;
+              
+              const startDate = new Date(dateRange.start);
+              const endDate = new Date(dateRange.end);
+              
+              // Fetch historical prices
+              const cryptoHistorical = await cryptoPriceService.fetchHistoricalPrices(
+                coinId,
+                cryptoSymbol,
+                startDate,
+                endDate
+              );
+              
+              if (cryptoHistorical && cryptoHistorical.length > 0) {
+                // Store in database
+                await cryptoPriceService.storeHistoricalPrices(symbol, cryptoHistorical);
+                
+                // Update historical data
+                historicalData = cryptoHistorical.map(point => ({
+                  timestamp: new Date(point.date).getTime(),
+                  open: parseFloat(point.open),
+                  high: parseFloat(point.high),
+                  low: parseFloat(point.low),
+                  close: parseFloat(point.close),
+                  volume: parseInt(point.volume) || 0
+                }));
+              }
+            }
+          } catch (error) {
+            console.error(`Error fetching crypto historical data for ${symbol}:`, error.message);
+            // Use DB data if available
+          }
         } else {
+          // Handle equity historical data using Polygon
           await delay(500); // Rate limit delay
           
           const apiUrl = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${dateRange.start}/${dateRange.end}?apiKey=${process.env.POLYGON_API_KEY}`;
@@ -241,32 +334,13 @@ router.get('/:symbol', async (req, res) => {
 
     // 4. Update or insert asset info
     if (assetInfo) {
-      // Determine category based on type
-      const assetType = (assetInfo.type || assetInfo.type || '').toLowerCase();
-      let category = 'equities'; // default
-      
-      if (assetType.includes('crypto') || symbol.startsWith('X:') && symbol.includes('BTC') || symbol.includes('ETH')) {
-        category = 'crypto';
-      } else if (assetType.includes('commodity') || symbol.includes('XAU') || symbol.includes('XAG') || symbol.includes('CL') || symbol.includes('NG')) {
-        category = 'commodities';
-      } else if (assetType.includes('forex') || ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD'].includes(symbol)) {
-        category = 'forex';
-      } else if (assetType.includes('etf') || assetType.includes('index')) {
-        category = 'equities'; // ETFs and indices are still equities for ratings
-      } else if (assetType.includes('stock') || assetType === 'cs' || !assetType) {
-        category = 'equities';
-      } else {
-        category = 'alternatives';
-      }
-
       await pool.query(
-        `INSERT INTO asset_info (symbol, name, type, category, exchange, currency, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        `INSERT INTO asset_info (symbol, name, type, exchange, currency, updated_at)
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
          ON CONFLICT (symbol) 
          DO UPDATE SET 
            name = EXCLUDED.name,
            type = EXCLUDED.type,
-           category = EXCLUDED.category,
            exchange = EXCLUDED.exchange,
            currency = EXCLUDED.currency,
            updated_at = CURRENT_TIMESTAMP`,
@@ -274,7 +348,6 @@ router.get('/:symbol', async (req, res) => {
           symbol,
           assetInfo.name || assetInfo.name,
           assetInfo.type || assetInfo.type,
-          category,
           assetInfo.primary_exchange || assetInfo.exchange || assetInfo.market || '',
           assetInfo.currency_name || assetInfo.currency || 'USD'
         ]
@@ -283,7 +356,7 @@ router.get('/:symbol', async (req, res) => {
 
     // 5. Get asset info from DB
     const infoResult = await pool.query(
-      'SELECT * FROM asset_info WHERE symbol = $1',
+      'SELECT *, logo_url FROM asset_info WHERE symbol = $1',
       [symbol]
     );
 
@@ -291,7 +364,6 @@ router.get('/:symbol', async (req, res) => {
       symbol,
       name: symbol,
       type: 'stock',
-      category: 'equities',
       exchange: '',
       currency: 'USD'
     };
@@ -320,13 +392,29 @@ router.get('/:symbol', async (req, res) => {
       }
     }
 
+    // Get or fetch logo
+    let logoUrl = assetMetadata.logo_url;
+    if (!logoUrl) {
+      // Try to fetch logo asynchronously (don't block response)
+      logoService.getAssetLogo(symbol, assetMetadata.type, assetMetadata.name)
+        .then(url => {
+          if (url) {
+            // Logo will be available on next request
+            console.log(`Logo fetched for ${symbol}: ${url}`);
+          }
+        })
+        .catch(err => {
+          console.log(`Could not fetch logo for ${symbol}:`, err.message);
+        });
+    }
+
     res.json({
       symbol,
       name: assetMetadata.name,
       type: assetMetadata.type,
-      category: assetMetadata.category || 'equities',
       exchange: assetMetadata.exchange,
       currency: assetMetadata.currency,
+      logoUrl: logoUrl || null,
       currentPrice,
       priceChange,
       priceChangePercent,
@@ -339,6 +427,110 @@ router.get('/:symbol', async (req, res) => {
     });
   } catch (error) {
     console.error('Asset detail error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Get dividends for an asset
+router.get('/:symbol/dividends', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    // dividendService already imported from services/index
+
+    // Fetch and sync dividends
+    const dividends = await dividendService.fetchAndSyncDividends(symbol);
+    
+    // Get statistics
+    const stats = await dividendService.getDividendStats(symbol);
+
+    res.json({
+      symbol,
+      dividends,
+      statistics: stats,
+    });
+  } catch (error) {
+    console.error('Dividends error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Get filings for an asset
+router.get('/:symbol/filings', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { type } = req.query; // Optional: filter by filing type
+    // filingsService already imported from services/index
+
+    // Fetch and sync filings
+    const filings = await filingsService.fetchAndSyncFilings(symbol);
+    
+    // Filter by type if provided
+    const filteredFilings = type 
+      ? filings.filter(f => f.filingType === type)
+      : filings;
+    
+    // Get statistics
+    const stats = await filingsService.getFilingsStats(symbol);
+
+    res.json({
+      symbol,
+      filings: filteredFilings,
+      statistics: stats,
+    });
+  } catch (error) {
+    console.error('Filings error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Get analyst ratings for an asset
+router.get('/:symbol/ratings', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    // analystRatingsService already imported from services/index
+
+    // Fetch and sync ratings
+    const ratings = await analystRatingsService.fetchAndSyncRatings(symbol);
+
+    res.json(ratings);
+  } catch (error) {
+    console.error('Ratings error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Get logo for an asset
+router.get('/:symbol/logo', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    
+    // Get asset info
+    const infoResult = await pool.query(
+      'SELECT logo_url, type, name FROM asset_info WHERE symbol = $1',
+      [symbol.toUpperCase()]
+    );
+
+    if (infoResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Asset not found' });
+    }
+
+    const assetInfo = infoResult.rows[0];
+    
+    // If logo exists, return it
+    if (assetInfo.logo_url) {
+      return res.json({ logoUrl: assetInfo.logo_url });
+    }
+
+    // Try to fetch logo
+    const logoUrl = await logoService.getAssetLogo(
+      symbol.toUpperCase(),
+      assetInfo.type,
+      assetInfo.name
+    );
+
+    res.json({ logoUrl: logoUrl || null });
+  } catch (error) {
+    console.error('Logo fetch error:', error);
     res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });

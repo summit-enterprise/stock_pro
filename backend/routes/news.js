@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const redis = require('redis');
+const { newsService, assetNewsService } = require('../services');
 const router = express.Router();
 
 // Redis client will be passed from server.js or created here
@@ -118,7 +119,7 @@ router.get('/asset/:symbol', async (req, res) => {
     const { symbol } = req.params;
     
     // Use the asset news service
-    const assetNewsService = require('../services/assetNewsService');
+    const { assetNewsService } = require('../services');
     const articles = await assetNewsService.getAssetNews(symbol);
 
     res.json({ articles });
@@ -205,8 +206,7 @@ router.get('/crypto', async (req, res) => {
       }
     }
 
-    // Cache miss - fetch from API
-    const newsService = require('../services/newsService');
+    // Cache miss - fetch from API (newsService already imported)
     const articles = await newsService.fetchAndCacheNews('crypto', null, 'cryptocurrency OR bitcoin OR ethereum');
 
     res.json({ articles });
@@ -234,8 +234,7 @@ router.get('/us', async (req, res) => {
       }
     }
 
-    // Cache miss - fetch from API
-    const newsService = require('../services/newsService');
+    // Cache miss - fetch from API (newsService already imported)
     const articles = await newsService.fetchAndCacheNews('us', 'us', null);
 
     res.json({ articles });
@@ -264,7 +263,7 @@ router.get('/world', async (req, res) => {
     }
 
     // Cache miss - fetch from API
-    const newsService = require('../services/newsService');
+    // newsService already imported
     const articles = await newsService.fetchAndCacheNews('world', null, null);
 
     res.json({ articles });

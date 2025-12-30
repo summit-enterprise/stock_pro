@@ -58,28 +58,9 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
           localStorage.setItem('token', data.token);
           localStorage.setItem('user', JSON.stringify(data.user));
           
-          // If user is admin/superuser, automatically get admin token
+          // If user is admin/superuser, also set adminToken (unified session)
           if (data.user.is_admin || data.user.is_superuser) {
-            try {
-              const adminResponse = await fetch('http://localhost:3001/api/admin/verify-token', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${data.token}`,
-                },
-              });
-
-              if (adminResponse.ok) {
-                const adminData = await adminResponse.json();
-                if (adminData.token) {
-                  localStorage.setItem('admin_token', adminData.token);
-                  localStorage.setItem('admin_user', JSON.stringify(adminData.user));
-                }
-              }
-            } catch (err) {
-              console.error('Error getting admin token:', err);
-              // Continue anyway - user can still access regular features
-            }
+            localStorage.setItem('adminToken', data.token);
           }
           
           // Dispatch event to notify Navbar of auth change
@@ -87,7 +68,13 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
         }
 
         onClose();
-        router.push('/dashboard');
+        
+        // Redirect admins to admin panel, regular users to dashboard
+        if (data.user.is_admin || data.user.is_superuser) {
+          router.push('/admin');
+        } else {
+          router.push('/dashboard');
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Google login failed');
       } finally {
@@ -123,12 +110,24 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
       if (data.token) {
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(data.user));
+        
+        // If user is admin, also set adminToken
+        if (data.user.is_admin || data.user.is_superuser) {
+          localStorage.setItem('adminToken', data.token);
+        }
+        
         // Dispatch event to notify Navbar of auth change
         window.dispatchEvent(new Event('auth-change'));
       }
 
       onClose();
-      router.push('/dashboard');
+      
+      // Redirect admins to admin panel, regular users to dashboard
+      if (data.user.is_admin || data.user.is_superuser) {
+        router.push('/admin');
+      } else {
+        router.push('/dashboard');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
