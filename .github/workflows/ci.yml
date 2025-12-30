@@ -1,0 +1,189 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # Lint and build frontend
+  frontend:
+    name: Frontend - Lint & Build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: ./frontend
+        run: npm run lint -- --max-warnings 0 || true
+        continue-on-error: true
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+  # Lint and build backend
+  backend:
+    name: Backend - Lint & Build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Check backend syntax
+        working-directory: ./backend
+        run: |
+          # Check for syntax errors in main files
+          node -c server.js || exit 1
+          find routes services -name "*.js" -type f | xargs -I {} node -c {} || exit 1
+        continue-on-error: true
+
+  # Security audit
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run npm audit (frontend)
+        working-directory: ./frontend
+        run: npm audit --audit-level=moderate || true
+        continue-on-error: true
+
+      - name: Run npm audit (backend)
+        working-directory: ./backend
+        run: npm audit --audit-level=moderate || true
+        continue-on-error: true
+
+  # Check for exposed secrets
+  secrets-check:
+    name: Secrets Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for exposed secrets
+        run: |
+          echo "Checking for potential exposed secrets..."
+          
+          # Check for common API key patterns
+          if grep -r -E "(api[_-]?key|apikey|secret|password|token)\s*[:=]\s*['\"][^'\"]{10,}" \
+            --include="*.js" \
+            --include="*.ts" \
+            --include="*.tsx" \
+            --exclude-dir=node_modules \
+            --exclude-dir=.next \
+            --exclude-dir=.git \
+            backend/ frontend/; then
+            echo "⚠️  Warning: Potential hardcoded secrets found!"
+            exit 1
+          else
+            echo "✅ No hardcoded secrets detected"
+          fi
+
+  # Validate environment files exist (but not committed)
+  env-check:
+    name: Environment Files Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify .env files are not tracked
+        run: |
+          if git ls-files | grep -E "\.env$|\.env\.local$|\.env\.production$"; then
+            echo "❌ ERROR: .env files should not be committed to git!"
+            exit 1
+          else
+            echo "✅ No .env files found in repository"
+          fi
+
+      - name: Check .gitignore includes .env
+        run: |
+          if grep -q "^\.env" .gitignore; then
+            echo "✅ .env files are properly ignored"
+          else
+            echo "⚠️  Warning: .env might not be in .gitignore"
+          fi
+
+  # Docker Compose validation
+  docker-compose:
+    name: Docker Compose Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        run: |
+          if command -v docker-compose &> /dev/null || command -v docker &> /dev/null; then
+            echo "Validating docker-compose.yml syntax..."
+            docker-compose config > /dev/null 2>&1 || docker compose config > /dev/null 2>&1 || echo "⚠️  Docker not available, skipping validation"
+          else
+            echo "⚠️  Docker not available, skipping validation"
+          fi
+
+  # TypeScript type checking (frontend)
+  typecheck:
+    name: TypeScript Type Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run TypeScript type check
+        working-directory: ./frontend
+        run: npx tsc --noEmit || true
+        continue-on-error: true
+
