@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   LineChart,
   Line,
@@ -37,6 +37,7 @@ interface PortfolioPerformanceChartProps {
     totalMarketValue?: number;
     logoUrl?: string | null;
   }>;
+  onSelectionChange?: (selectedSymbols: Set<string>) => void;
 }
 
 const TIME_RANGES = [
@@ -67,52 +68,141 @@ const COLORS = [
   '#6366F1', // Indigo
 ];
 
-export default function PortfolioPerformanceChart({ token, portfolioItems }: PortfolioPerformanceChartProps) {
+export default function PortfolioPerformanceChart({ token, portfolioItems, onSelectionChange }: PortfolioPerformanceChartProps) {
   const [timeRange, setTimeRange] = useState('1Y');
-  const [selectedPositions, setSelectedPositions] = useState<string>('all');
+  const [selectedPositions, setSelectedPositions] = useState<Set<string>>(new Set());
   const [chartType, setChartType] = useState<'line' | 'bar' | 'pie'>('line');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [performanceData, setPerformanceData] = useState<PerformanceDataPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isPositionDropdownOpen, setIsPositionDropdownOpen] = useState(false);
+  const [useCustomDates, setUseCustomDates] = useState(false);
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const positionDropdownRef = useRef<HTMLDivElement>(null);
   
-  // Get unique categories from portfolio items
-  const categories = Array.from(new Set(portfolioItems.map(item => item.category || item.type || 'Unknown').filter(Boolean)));
+  // Initialize default dates (1 year ago to today)
+  useEffect(() => {
+    const today = new Date();
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(today.getFullYear() - 1);
+    
+    setEndDate(today.toISOString().split('T')[0]);
+    setStartDate(oneYearAgo.toISOString().split('T')[0]);
+  }, []);
+  
+  // Normalize categories to standard format
+  const normalizeCategory = (cat: string | undefined): string => {
+    if (!cat) return 'Unknown';
+    const lower = cat.toLowerCase();
+    const categoryMap: { [key: string]: string } = {
+      'equity': 'Equity',
+      'equities': 'Equity',
+      'stock': 'Equity',
+      'stocks': 'Equity',
+      'etf': 'ETF',
+      'exchange traded fund': 'ETF',
+      'forex': 'Forex',
+      'fx': 'Forex',
+      'currency': 'Forex',
+      'mutual fund': 'MutualFund',
+      'mutualfund': 'MutualFund',
+      'fund': 'MutualFund',
+      'international stock': 'InternationalStock',
+      'internationalstock': 'InternationalStock',
+      'intl stock': 'InternationalStock',
+      'bond': 'Bond',
+      'bonds': 'Bond',
+      'treasury': 'Bond',
+      'index': 'Index',
+      'indices': 'Index',
+      'crypto': 'Crypto',
+      'cryptocurrency': 'Crypto',
+      'cryptocurrencies': 'Crypto',
+      'commodity': 'Commodity',
+      'commodities': 'Commodity',
+      'prediction': 'Predictions',
+      'predictions': 'Predictions',
+      'unknown': 'Unknown',
+    };
+    return categoryMap[lower] || cat;
+  };
+  
+  // Get unique categories from portfolio items (normalized)
+  const categories = Array.from(new Set(
+    portfolioItems.map(item => normalizeCategory(item.category || item.type || 'Unknown')).filter(Boolean)
+  )).sort();
   
   // Filter portfolio items by category
   const filteredPortfolioItems = selectedCategory === 'all' 
     ? portfolioItems 
-    : portfolioItems.filter(item => (item.category || item.type || 'Unknown') === selectedCategory);
+    : portfolioItems.filter(item => normalizeCategory(item.category || item.type || 'Unknown') === selectedCategory);
 
+  // Convert selectedPositions Set to string for dependency tracking
+  const selectedPositionsKey = Array.from(selectedPositions).sort().join(',');
+  
   useEffect(() => {
     if (filteredPortfolioItems.length > 0 && chartType !== 'pie') {
       fetchPerformanceData();
     }
-  }, [timeRange, selectedPositions, token, selectedCategory, chartType]);
+  }, [timeRange, selectedPositionsKey, token, selectedCategory, chartType, portfolioItems, useCustomDates, startDate, endDate]);
   
-  // Update selected positions when category changes
+  // Update selected positions when category or portfolio items change
   useEffect(() => {
     if (selectedCategory !== 'all') {
-      // If current selection includes items not in filtered category, reset to 'all'
-      if (selectedPositions !== 'all') {
-        const selectedSymbols = selectedPositions.split(',').map(s => s.trim());
-        const filteredSymbols = filteredPortfolioItems.map(item => item.symbol);
-        const hasInvalidSelection = selectedSymbols.some(symbol => !filteredSymbols.includes(symbol));
-        if (hasInvalidSelection) {
-          setSelectedPositions('all');
-        }
+      // If current selection includes items not in filtered category, remove them
+      const filteredSymbols = new Set(filteredPortfolioItems.map(item => item.symbol));
+      const newSelection = new Set(Array.from(selectedPositions).filter(symbol => filteredSymbols.has(symbol)));
+      if (newSelection.size !== selectedPositions.size) {
+        setSelectedPositions(newSelection);
       }
     }
-  }, [selectedCategory, filteredPortfolioItems, selectedPositions]);
+    
+    // If portfolio items change, refresh data
+    if (timeRange && token && chartType !== 'pie') {
+      fetchPerformanceData();
+    }
+  }, [selectedCategory, filteredPortfolioItems, portfolioItems]);
+
+  // Notify parent of selection changes
+  useEffect(() => {
+    if (onSelectionChange) {
+      onSelectionChange(selectedPositions);
+    }
+  }, [selectedPositions, onSelectionChange]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (positionDropdownRef.current && !positionDropdownRef.current.contains(event.target as Node)) {
+        setIsPositionDropdownOpen(false);
+      }
+    };
+
+    if (isPositionDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isPositionDropdownOpen]);
 
   const fetchPerformanceData = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({
-        timeRange: timeRange,
-      });
+      const params = new URLSearchParams();
       
-      if (selectedPositions !== 'all') {
-        params.append('symbols', selectedPositions);
+      // Use custom dates if enabled, otherwise use time range
+      if (useCustomDates && startDate && endDate) {
+        params.append('startDate', startDate);
+        params.append('endDate', endDate);
+      } else {
+        params.append('timeRange', timeRange);
+      }
+      
+      if (selectedPositions.size > 0 && selectedPositions.size < filteredPortfolioItems.length) {
+        params.append('symbols', Array.from(selectedPositions).join(','));
       }
 
       const response = await fetch(
@@ -137,7 +227,9 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
 
   // Format chart data for line/bar charts
   const formatChartData = () => {
-    if (selectedPositions === 'all') {
+    const isAllSelected = selectedPositions.size === 0 || selectedPositions.size === filteredPortfolioItems.length;
+    
+    if (isAllSelected) {
       return performanceData.map(point => ({
         date: new Date(point.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         'Portfolio Value': Math.round(point.totalValue * 100) / 100,
@@ -146,16 +238,15 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
       }));
     } else {
       // Show individual positions
-      const symbols = selectedPositions.split(',').map(s => s.trim());
+      const symbols = Array.from(selectedPositions);
       return performanceData.map(point => {
         const dataPoint: any = {
           date: new Date(point.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         };
         
         symbols.forEach((symbol) => {
-          const trimmedSymbol = symbol.trim();
-          const value = point.positions[trimmedSymbol] || 0;
-          dataPoint[trimmedSymbol] = Math.round(value * 100) / 100;
+          const value = point.positions[symbol] || 0;
+          dataPoint[symbol] = Math.round(value * 100) / 100;
         });
         
         return dataPoint;
@@ -180,7 +271,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
           name: item.symbol,
           value: Math.round(value * 100) / 100,
           percentage: Math.round(percentage * 100) / 100,
-          category: item.category || item.type || 'Unknown',
+          category: normalizeCategory(item.category || item.type || 'Unknown'),
         };
       })
       .filter(item => item.value > 0)
@@ -197,14 +288,16 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
   
   // Get bars to render (for bar chart)
   const getBars = () => {
-    if (selectedPositions === 'all') {
+    const isAllSelected = selectedPositions.size === 0 || selectedPositions.size === filteredPortfolioItems.length;
+    
+    if (isAllSelected) {
       return [
         <Bar key="portfolio-value" dataKey="Portfolio Value" fill="#3B82F6" name="Portfolio Value" />,
         <Bar key="total-cost" dataKey="Total Cost" fill="#6B7280" name="Total Cost" />,
         <Bar key="profit-loss" dataKey="Profit/Loss" fill="#10B981" name="Profit/Loss" />,
       ];
     } else {
-      const symbols = selectedPositions.split(',').map(s => s.trim());
+      const symbols = Array.from(selectedPositions);
       return symbols.map((symbol, index) => (
         <Bar
           key={symbol}
@@ -218,7 +311,9 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
 
   // Get lines to render
   const getLines = () => {
-    if (selectedPositions === 'all') {
+    const isAllSelected = selectedPositions.size === 0 || selectedPositions.size === filteredPortfolioItems.length;
+    
+    if (isAllSelected) {
       return [
         <Line 
           key="portfolio-value" 
@@ -259,7 +354,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
         />,
       ];
     } else {
-      const symbols = selectedPositions.split(',').map(s => s.trim());
+      const symbols = Array.from(selectedPositions);
       return symbols.map((symbol, index) => (
         <Line
           key={symbol}
@@ -289,7 +384,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
-        <div className={`bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg shadow-lg p-3`}>
+        <div className={`bg-gray-50 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg shadow-lg p-3`}>
           <p className="font-semibold text-gray-900 dark:text-white mb-2">{label}</p>
           {payload.map((entry: any, index: number) => (
             <p key={index} className="text-sm" style={{ color: entry.color }}>
@@ -304,7 +399,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
 
   if (portfolioItems.length === 0) {
     return (
-      <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+      <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
         <p className="text-gray-600 dark:text-gray-400 text-center">
           Add assets to your portfolio to view performance charts
         </p>
@@ -313,7 +408,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
   }
 
   return (
-    <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6 mb-6">
+    <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6 mb-6">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
           Portfolio Performance
@@ -321,7 +416,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
         
         {/* Controls */}
         <div className="flex flex-col gap-4 mb-4">
-          <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex flex-col sm:flex-row gap-4 flex-wrap">
             {/* Time Range Selector */}
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -329,8 +424,12 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
               </label>
               <select
                 value={timeRange}
-                onChange={(e) => setTimeRange(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-white dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(e) => {
+                  setTimeRange(e.target.value);
+                  setUseCustomDates(false);
+                }}
+                disabled={useCustomDates}
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {TIME_RANGES.map(range => (
                   <option key={range.value} value={range.value}>
@@ -340,6 +439,50 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
               </select>
             </div>
 
+            {/* Custom Date Range Toggle */}
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={useCustomDates}
+                onChange={(e) => setUseCustomDates(e.target.checked)}
+                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-zinc-700 dark:border-zinc-600"
+              />
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Custom Dates
+              </label>
+            </div>
+
+            {/* Custom Date Inputs */}
+            {useCustomDates && (
+              <>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    From:
+                  </label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    max={endDate || new Date().toISOString().split('T')[0]}
+                    className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    To:
+                  </label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    min={startDate}
+                    max={new Date().toISOString().split('T')[0]}
+                    className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </>
+            )}
+
             {/* Chart Type Selector */}
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -348,7 +491,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
               <select
                 value={chartType}
                 onChange={(e) => setChartType(e.target.value as 'line' | 'bar' | 'pie')}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-white dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {CHART_TYPES.map(type => (
                   <option key={type.value} value={type.value}>
@@ -367,7 +510,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-white dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="all">All Categories</option>
                   {categories.map(category => (
@@ -380,39 +523,94 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
             )}
           </div>
 
-          {/* Position Selector - Only show for line/bar charts */}
+          {/* Position Selector with Dropdown - Only show for line/bar charts */}
           {chartType !== 'pie' && (
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Positions:
-              </label>
-              <select
-                value={selectedPositions}
-                onChange={(e) => setSelectedPositions(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-white dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[200px]"
-              >
-                <option value="all">All Positions</option>
-                {filteredPortfolioItems.map(item => (
-                  <option key={item.symbol} value={item.symbol}>
-                    {item.symbol} - {item.name} ({item.category || item.type || 'Unknown'})
-                  </option>
-                ))}
-                {filteredPortfolioItems.length > 1 && (
-                  <>
-                    <optgroup label="Multiple Positions">
-                      {filteredPortfolioItems.slice(0, 5).map((item, index) => {
-                        if (index === 0) return null;
-                        const selected = filteredPortfolioItems.slice(0, index + 1).map(i => i.symbol).join(',');
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 mb-2">
+                <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Positions:
+                </label>
+                <button
+                  onClick={() => {
+                    const allSymbols = new Set(filteredPortfolioItems.map(item => item.symbol));
+                    setSelectedPositions(allSymbols);
+                  }}
+                  className="px-2 py-1 text-xs text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedPositions(new Set());
+                  }}
+                  className="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded transition-colors"
+                >
+                  Clear All
+                </button>
+              </div>
+              <div className="relative" ref={positionDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsPositionDropdownOpen(!isPositionDropdownOpen)}
+                  className="w-full px-3 py-2 text-sm text-left border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between"
+                >
+                  <span className="truncate">
+                    {selectedPositions.size === 0
+                      ? 'All positions'
+                      : selectedPositions.size === filteredPortfolioItems.length
+                      ? 'All positions selected'
+                      : `${selectedPositions.size} position${selectedPositions.size === 1 ? '' : 's'} selected`}
+                  </span>
+                  <svg
+                    className={`w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform ${
+                      isPositionDropdownOpen ? 'transform rotate-180' : ''
+                    }`}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                
+                {isPositionDropdownOpen && (
+                  <div className="absolute z-50 w-full mt-1 bg-gray-50 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 rounded-md shadow-lg max-h-64 overflow-y-auto">
+                    <div className="p-2 space-y-1">
+                      {filteredPortfolioItems.map((item) => {
+                        const category = normalizeCategory(item.category || item.type || 'Unknown');
+                        const isSelected = selectedPositions.has(item.symbol);
                         return (
-                          <option key={selected} value={selected}>
-                            First {index + 1} positions
-                          </option>
+                          <label
+                            key={item.symbol}
+                            className="flex items-center gap-2 p-2 hover:bg-gray-50 dark:hover:bg-zinc-700 rounded cursor-pointer transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                const newSelection = new Set(selectedPositions);
+                                if (e.target.checked) {
+                                  newSelection.add(item.symbol);
+                                } else {
+                                  newSelection.delete(item.symbol);
+                                }
+                                setSelectedPositions(newSelection);
+                              }}
+                              className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-zinc-700 dark:border-zinc-600"
+                            />
+                            <span className="text-sm text-gray-900 dark:text-white flex-1">
+                              <span className="font-medium">{item.symbol}</span>
+                              <span className="text-gray-600 dark:text-gray-400 ml-2">
+                                - {item.name} ({category})
+                              </span>
+                            </span>
+                          </label>
                         );
                       })}
-                    </optgroup>
-                  </>
+                    </div>
+                  </div>
                 )}
-              </select>
+              </div>
             </div>
           )}
         </div>
@@ -438,9 +636,10 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={({ name, percentage }) => {
+                  label={(entry: any) => {
+                    const percentage = entry.percentage || 0;
                     if (percentage < 3) return ''; // Don't show label for very small slices
-                    return `${name}\n${percentage}%`;
+                    return `${entry.name}\n${percentage.toFixed(1)}%`;
                   }}
                   outerRadius={120}
                   fill="#8884d8"
@@ -451,7 +650,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
                   ))}
                 </Pie>
                 <Tooltip 
-                  formatter={(value: number) => formatCurrency(value)}
+                  formatter={(value: number | undefined) => formatCurrency(value || 0)}
                   contentStyle={{
                     backgroundColor: isDarkMode ? '#18181b' : '#ffffff',
                     border: `1px solid ${isDarkMode ? '#3f3f46' : '#e4e4e7'}`,
@@ -465,7 +664,7 @@ export default function PortfolioPerformanceChart({ token, portfolioItems }: Por
               {pieChartData.map((entry, index) => {
                 const portfolioItem = filteredPortfolioItems.find(p => p.symbol === entry.name);
                 return (
-                  <div key={entry.name} className="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700">
+                  <div key={entry.name} className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700">
                     <div 
                       className="w-4 h-4 rounded-full flex-shrink-0"
                       style={{ backgroundColor: COLORS[index % COLORS.length] }}

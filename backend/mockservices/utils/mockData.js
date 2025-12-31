@@ -38,6 +38,19 @@ const BASE_PRICES = {
   // Crypto
   'X:BTCUSD': 67000.00,
   'X:ETHUSD': 3400.00,
+  'X:BNBUSD': 600.00,
+  'X:ADAUSD': 0.50,
+  'X:SOLUSD': 150.00,
+  'X:XRPUSD': 0.60,
+  'X:DOGEUSD': 0.15,
+  'X:DOTUSD': 7.00,
+  'X:AVAXUSD': 35.00,
+  'X:MATICUSD': 0.80,
+  'X:LINKUSD': 15.00,
+  'X:UNIUSD': 8.00,
+  'X:LTCUSD': 85.00,
+  'X:ATOMUSD': 10.00,
+  'X:ALGOUSD': 0.20,
   // Commodities
   'XAUUSD': 2345.00,
   'XAGUSD': 28.50,
@@ -255,11 +268,14 @@ function initializeHistoricalData(symbol, pool) {
 
 // Generate mock market movers (gainers and losers)
 function getMockMovers() {
-  // Get a list of popular stock symbols
-  const symbols = Object.keys(BASE_PRICES).filter(s => !s.startsWith('X:') && !s.startsWith('^'));
+  // Get a list of popular stock symbols (excluding indices)
+  const stockSymbols = Object.keys(BASE_PRICES).filter(s => !s.startsWith('X:') && !s.startsWith('^'));
   
-  // Generate movers with random price changes
-  const movers = symbols.map(symbol => {
+  // Get crypto symbols (starting with X:)
+  const cryptoSymbols = Object.keys(BASE_PRICES).filter(s => s.startsWith('X:') && (s.includes('BTC') || s.includes('ETH') || s.includes('BNB') || s.includes('ADA') || s.includes('SOL')));
+  
+  // Generate stock movers with random price changes
+  const stockMovers = stockSymbols.map(symbol => {
     const basePrice = BASE_PRICES[symbol] || 100;
     const priceData = getCurrentPrice(symbol);
     const previousCloseData = getPreviousClose(symbol);
@@ -276,18 +292,54 @@ function getMockMovers() {
     };
   });
   
-  // Sort and separate gainers and losers
-  const gainers = movers
+  // Generate crypto movers with random price changes (higher volatility)
+  const cryptoMovers = cryptoSymbols.map(symbol => {
+    const basePrice = BASE_PRICES[symbol] || 100;
+    // Crypto has higher volatility
+    const volatility = 0.05; // 5% volatility for crypto
+    const changePercent = (Math.random() * 2 - 1) * volatility * 100; // -5% to +5%
+    const change = basePrice * (changePercent / 100);
+    const price = basePrice + change;
+    
+    return {
+      symbol,
+      name: getMockAssetInfo(symbol).name || symbol,
+      price: parseFloat(price.toFixed(2)),
+      change: parseFloat(change.toFixed(2)),
+      changePercent: parseFloat(changePercent.toFixed(2)),
+    };
+  });
+  
+  // Sort and separate stock gainers and losers
+  const stockGainers = stockMovers
     .filter(m => m.changePercent > 0)
     .sort((a, b) => b.changePercent - a.changePercent)
-    .slice(0, 10);
+    .slice(0, 25);
   
-  const losers = movers
+  const stockLosers = stockMovers
     .filter(m => m.changePercent < 0)
     .sort((a, b) => a.changePercent - b.changePercent)
-    .slice(0, 10);
+    .slice(0, 25);
   
-  return { gainers, losers };
+  // Sort and separate crypto gainers and losers
+  const cryptoGainers = cryptoMovers
+    .filter(m => m.changePercent > 0)
+    .sort((a, b) => b.changePercent - a.changePercent)
+    .slice(0, 25);
+  
+  const cryptoLosers = cryptoMovers
+    .filter(m => m.changePercent < 0)
+    .sort((a, b) => a.changePercent - b.changePercent)
+    .slice(0, 25);
+  
+  return { 
+    gainers: [...stockGainers, ...cryptoGainers],
+    losers: [...stockLosers, ...cryptoLosers],
+    stockGainers,
+    stockLosers,
+    cryptoGainers,
+    cryptoLosers,
+  };
 }
 
 module.exports = {

@@ -19,6 +19,16 @@ export default function WatchlistSection() {
 
   useEffect(() => {
     fetchWatchlist();
+    
+    // Listen for watchlist changes
+    const handleWatchlistChange = () => {
+      fetchWatchlist();
+    };
+    
+    window.addEventListener('watchlist-changed', handleWatchlistChange);
+    return () => {
+      window.removeEventListener('watchlist-changed', handleWatchlistChange);
+    };
   }, []);
 
   const fetchWatchlist = async () => {
@@ -48,7 +58,7 @@ export default function WatchlistSection() {
 
   if (loading) {
     return (
-      <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+      <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
         <div className="animate-pulse">
           <div className="h-6 bg-gray-200 dark:bg-zinc-800 rounded w-32 mb-4"></div>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -63,7 +73,7 @@ export default function WatchlistSection() {
 
   if (watchlist.length === 0) {
     return (
-      <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+      <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <span>⭐</span> Watchlist
@@ -83,7 +93,7 @@ export default function WatchlistSection() {
   }
 
   return (
-    <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+    <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
           <span>⭐</span> Watchlist
@@ -100,12 +110,12 @@ export default function WatchlistSection() {
           <div
             key={item.symbol}
             onClick={() => router.push(`/asset/${item.symbol}`)}
-            className="bg-white dark:bg-zinc-800 rounded-lg p-4 cursor-pointer hover:shadow-lg transition-shadow border border-gray-200 dark:border-zinc-700"
+            className="bg-gray-50 dark:bg-zinc-800 rounded-lg p-4 cursor-pointer hover:shadow-lg transition-shadow border border-gray-200 dark:border-zinc-700 flex flex-col"
           >
-            <div className="font-semibold text-gray-900 dark:text-white mb-1">
+            <div className="font-semibold text-gray-900 dark:text-white mb-1 truncate">
               {item.symbol}
             </div>
-            <div className="text-sm text-gray-600 dark:text-gray-400 mb-2 truncate">
+            <div className="text-xs text-gray-600 dark:text-gray-400 mb-2 line-clamp-2 min-h-[2.5rem]">
               {item.name}
             </div>
             <div className="text-lg font-bold text-gray-900 dark:text-white mb-1">

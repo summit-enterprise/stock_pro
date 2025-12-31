@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const { pool } = require('../db');
+const { verifyToken } = require('../middleware/auth');
+const { getRedisClient } = require('../config/redis');
 const { 
   mockData, 
   logoService, 
@@ -12,6 +14,9 @@ const {
 } = require('../services');
 const router = express.Router();
 
+// Protect all asset routes
+router.use(verifyToken);
+
 // Check if we should use mock data
 const USE_MOCK_DATA = process.env.NODE_ENV !== 'production' && process.env.USE_MOCK_DATA !== 'false';
 
@@ -21,7 +26,9 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // Get asset detail (current price, metadata, recent data)
 router.get('/:symbol', async (req, res) => {
   try {
-    const { symbol } = req.params;
+    // Decode the symbol to handle URL encoding (e.g., %5E for ^)
+    let { symbol } = req.params;
+    symbol = decodeURIComponent(symbol);
     const { range = '1M' } = req.query; // Default to 1 month
 
     // Check if this is a crypto symbol (format: X:SYMBOLUSD)
@@ -44,6 +51,9 @@ router.get('/:symbol', async (req, res) => {
         case '1D':
           start.setDate(start.getDate() - 1);
           break;
+        case '5D':
+          start.setDate(start.getDate() - 5);
+          break;
         case '1W':
           start.setDate(start.getDate() - 7);
           break;
@@ -56,11 +66,23 @@ router.get('/:symbol', async (req, res) => {
         case '6M':
           start.setMonth(start.getMonth() - 6);
           break;
+        case 'YTD':
+          start.setMonth(0, 1); // January 1st of current year
+          break;
         case '1Y':
           start.setFullYear(start.getFullYear() - 1);
           break;
+        case '3Y':
+          start.setFullYear(start.getFullYear() - 3);
+          break;
         case '5Y':
           start.setFullYear(start.getFullYear() - 5);
+          break;
+        case '10Y':
+          start.setFullYear(start.getFullYear() - 10);
+          break;
+        case 'MAX':
+          start.setFullYear(2010, 0, 1); // Start from 2010 or earliest available
           break;
         default:
           start.setMonth(start.getMonth() - 1);
@@ -74,25 +96,57 @@ router.get('/:symbol', async (req, res) => {
 
     const dateRange = getDateRange(range);
 
-    // 1. ALWAYS check database for historical data first (we have 5 years of data!)
-    let historicalData = [];
+    // Check Redis cache first for historical data
+    const cacheKey = `asset_data:${symbol}:${range}`;
+    const CACHE_TTL = range === 'MAX' || range === '10Y' ? 60 * 60 : 5 * 60; // 1 hour for MAX/10Y, 5 min for others
+    const redisClient = await getRedisClient();
     
-    const dbResult = await pool.query(
-      `SELECT date, open, high, low, close, volume 
-       FROM asset_data 
-       WHERE symbol = $1 AND date >= $2 AND date <= $3 
-       ORDER BY date ASC`,
-      [symbol, dateRange.start, dateRange.end]
-    );
+    let historicalData = [];
+    let cacheHit = false;
+    
+    if (redisClient && redisClient.isOpen) {
+      try {
+        const cachedData = await redisClient.get(cacheKey);
+        if (cachedData) {
+          const parsed = JSON.parse(cachedData);
+          historicalData = parsed;
+          cacheHit = true;
+          console.log(`Asset data cache hit for ${symbol} (${range})`);
+        }
+      } catch (redisError) {
+        console.warn('Redis cache read failed for asset data, continuing...');
+      }
+    }
 
-    historicalData = dbResult.rows.map(row => ({
-      timestamp: new Date(row.date).getTime(),
-      open: parseFloat(row.open),
-      high: parseFloat(row.high),
-      low: parseFloat(row.low),
-      close: parseFloat(row.close),
-      volume: parseInt(row.volume) || 0
-    }));
+    // If cache miss, fetch from database
+    if (!cacheHit) {
+      const dbResult = await pool.query(
+        `SELECT date, open, high, low, close, volume 
+         FROM asset_data 
+         WHERE symbol = $1 AND date >= $2 AND date <= $3 
+         ORDER BY date ASC`,
+        [symbol, dateRange.start, dateRange.end]
+      );
+
+      historicalData = dbResult.rows.map(row => ({
+        timestamp: new Date(row.date).getTime(),
+        open: parseFloat(row.open),
+        high: parseFloat(row.high),
+        low: parseFloat(row.low),
+        close: parseFloat(row.close),
+        volume: parseInt(row.volume) || 0
+      }));
+
+      // Cache in Redis
+      if (redisClient && redisClient.isOpen && historicalData.length > 0) {
+        try {
+          await redisClient.setEx(cacheKey, CACHE_TTL, JSON.stringify(historicalData));
+          console.log(`Asset data cached for ${symbol} (${range})`);
+        } catch (e) {
+          console.warn('Failed to cache asset data in Redis');
+        }
+      }
+    }
 
     // 2. Get current price and metadata from API or mock
     let currentPrice = null;
@@ -170,8 +224,12 @@ router.get('/:symbol', async (req, res) => {
     }
 
     // 3. If we don't have enough historical data in DB, fetch from API/mock and store in DB
-    // Only fetch if we have less than 10 days of data (shouldn't happen with our populated DB)
-    if (historicalData.length < 10) {
+    // Fetch if we have no data or very little data for the requested range
+    const minDataPoints = range === '1D' ? 1 : range === '1W' ? 5 : range === '1M' ? 20 : 
+                          range === '3M' ? 60 : range === '6M' ? 120 : range === '1Y' ? 250 : 
+                          range === '5Y' ? 1250 : 20;
+    
+    if (historicalData.length < minDataPoints) {
       try {
         if (USE_MOCK_DATA) {
           // Generate mock historical data based on range (fallback only)
@@ -275,13 +333,16 @@ router.get('/:symbol', async (req, res) => {
             // Use DB data if available
           }
         } else {
-          // Handle equity historical data using Polygon
+          // Handle equity/index historical data using Polygon
           await delay(500); // Rate limit delay
           
-          const apiUrl = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${dateRange.start}/${dateRange.end}?apiKey=${process.env.POLYGON_API_KEY}`;
-          const apiResponse = await axios.get(apiUrl, { timeout: 10000 });
-          
-          if (apiResponse.data && apiResponse.data.results) {
+          try {
+            const apiUrl = `https://api.polygon.io/v2/aggs/ticker/${symbol}/range/1/day/${dateRange.start}/${dateRange.end}?apiKey=${process.env.POLYGON_API_KEY}`;
+            console.log(`Fetching historical data from Polygon for ${symbol}...`);
+            const apiResponse = await axios.get(apiUrl, { timeout: 15000 });
+            
+            if (apiResponse.data && apiResponse.data.results && apiResponse.data.results.length > 0) {
+              console.log(`✅ Got ${apiResponse.data.results.length} data points from Polygon for ${symbol}`);
             // Store in database
             for (const result of apiResponse.data.results) {
               const date = new Date(result.t);
@@ -312,20 +373,56 @@ router.get('/:symbol', async (req, res) => {
               );
             }
 
-            // Update historical data from API response
-            historicalData = apiResponse.data.results.map(result => ({
-              timestamp: result.t,
-              open: result.o,
-              high: result.h,
-              low: result.l,
-              close: result.c,
-              volume: result.v || 0
-            }));
+              // Update historical data from API response
+              historicalData = apiResponse.data.results.map(result => ({
+                timestamp: result.t,
+                open: result.o,
+                high: result.h,
+                low: result.l,
+                close: result.c,
+                volume: result.v || 0
+              }));
+            } else {
+              console.warn(`⚠️ Polygon API returned no results for ${symbol}. Response:`, apiResponse.data);
+            }
+          } catch (apiError) {
+            console.error(`❌ Error fetching from Polygon API for ${symbol}:`, apiError.response?.status, apiError.response?.data?.error || apiError.message);
+            // If API fails and we have no data, try generating mock data as fallback
+            if (historicalData.length === 0 && USE_MOCK_DATA) {
+              console.log(`🔄 Generating mock data as fallback for ${symbol}...`);
+              const days = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 30 : 
+                          range === '3M' ? 90 : range === '6M' ? 180 : range === '1Y' ? 365 : 
+                          range === '5Y' ? 1825 : range === '10Y' ? 3650 : 30;
+              const mockHistorical = mockData.generateHistoricalData(symbol, days);
+              historicalData = mockHistorical.map(result => ({
+                timestamp: result.timestamp,
+                open: result.open,
+                high: result.high,
+                low: result.low,
+                close: result.close,
+                volume: result.volume || 0
+              }));
+            }
           }
         }
       } catch (error) {
         console.error(`Error fetching historical data for ${symbol}:`, error.message);
         // Use DB data if available, even if limited
+        // If no DB data and USE_MOCK_DATA, generate mock data
+        if (historicalData.length === 0 && USE_MOCK_DATA) {
+          const days = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 30 : 
+                      range === '3M' ? 90 : range === '6M' ? 180 : range === '1Y' ? 365 : 
+                      range === '5Y' ? 1825 : range === '10Y' ? 3650 : 30;
+          const mockHistorical = mockData.generateHistoricalData(symbol, days);
+          historicalData = mockHistorical.map(result => ({
+            timestamp: result.timestamp,
+            open: result.open,
+            high: result.high,
+            low: result.low,
+            close: result.close,
+            volume: result.volume || 0
+          }));
+        }
       }
     } else {
       // We have data from DB, log for debugging
@@ -356,17 +453,22 @@ router.get('/:symbol', async (req, res) => {
 
     // 5. Get asset info from DB
     const infoResult = await pool.query(
-      'SELECT *, logo_url FROM asset_info WHERE symbol = $1',
+      'SELECT *, logo_url, category FROM asset_info WHERE symbol = $1',
       [symbol]
     );
 
+    const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
     const assetMetadata = infoResult.rows[0] || {
       symbol,
       name: symbol,
       type: 'stock',
       exchange: '',
-      currency: 'USD'
+      currency: 'USD',
+      category: null
     };
+    
+    // Ensure category is set
+    const category = assetMetadata.category || normalizeCategory(determineCategory(symbol, assetMetadata.type, assetMetadata.exchange)) || 'Unknown';
 
     // Calculate price change if we have latest data
     let priceChange = 0;
@@ -412,6 +514,7 @@ router.get('/:symbol', async (req, res) => {
       symbol,
       name: assetMetadata.name,
       type: assetMetadata.type,
+      category: category,
       exchange: assetMetadata.exchange,
       currency: assetMetadata.currency,
       logoUrl: logoUrl || null,
@@ -458,23 +561,41 @@ router.get('/:symbol/dividends', async (req, res) => {
 router.get('/:symbol/filings', async (req, res) => {
   try {
     const { symbol } = req.params;
-    const { type } = req.query; // Optional: filter by filing type
+    const { type, search, sortOrder } = req.query; // Optional: filter by filing type, search, sort order
     // filingsService already imported from services/index
 
     // Fetch and sync filings
-    const filings = await filingsService.fetchAndSyncFilings(symbol);
+    let filings = await filingsService.fetchAndSyncFilings(symbol);
     
     // Filter by type if provided
-    const filteredFilings = type 
-      ? filings.filter(f => f.filingType === type)
-      : filings;
+    if (type) {
+      filings = filings.filter(f => f.filingType === type);
+    }
+    
+    // Filter by search query if provided
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filings = filings.filter(f => 
+        f.filingType.toLowerCase().includes(searchLower) ||
+        (f.description && f.description.toLowerCase().includes(searchLower)) ||
+        (f.formType && f.formType.toLowerCase().includes(searchLower))
+      );
+    }
+    
+    // Sort by date
+    const order = sortOrder && sortOrder.toLowerCase() === 'asc' ? 'asc' : 'desc';
+    filings.sort((a, b) => {
+      const dateA = new Date(a.filingDate).getTime();
+      const dateB = new Date(b.filingDate).getTime();
+      return order === 'asc' ? dateA - dateB : dateB - dateA;
+    });
     
     // Get statistics
     const stats = await filingsService.getFilingsStats(symbol);
 
     res.json({
       symbol,
-      filings: filteredFilings,
+      filings: filings,
       statistics: stats,
     });
   } catch (error) {

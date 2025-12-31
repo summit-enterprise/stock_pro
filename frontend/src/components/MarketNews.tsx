@@ -28,10 +28,17 @@ export default function MarketNews() {
 
   const fetchNews = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/news/market');
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3001/api/news/market', {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
       if (response.ok) {
         const data = await response.json();
         setNews(data.articles || []);
+      } else {
+        console.error('Error fetching news:', response.status, response.statusText);
       }
     } catch (error) {
       console.error('Error fetching news:', error);
@@ -61,7 +68,7 @@ export default function MarketNews() {
 
   if (loading) {
     return (
-      <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6" id="market-news-section">
+      <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6" id="market-news-section">
         <div className="animate-pulse">
           <div className="h-6 bg-gray-200 dark:bg-zinc-800 rounded w-32 mb-4"></div>
           <div className="space-y-3">
@@ -75,7 +82,7 @@ export default function MarketNews() {
   }
 
   return (
-    <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6" id="market-news-section">
+    <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6" id="market-news-section">
       <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
         <span>📰</span> Market News
       </h2>
@@ -86,19 +93,32 @@ export default function MarketNews() {
             <div
               key={item.id}
               onClick={() => handleArticleClick(item.url)}
-              className="p-4 bg-white dark:bg-zinc-800 rounded-lg hover:shadow-lg transition-all cursor-pointer border border-gray-200 dark:border-zinc-700 hover:border-blue-500 dark:hover:border-blue-400"
+              className="p-4 bg-gray-50 dark:bg-zinc-800 rounded-lg hover:shadow-lg transition-all cursor-pointer border border-gray-200 dark:border-zinc-700 hover:border-blue-500 dark:hover:border-blue-400 flex gap-4"
             >
-              <h3 className="font-semibold text-gray-900 dark:text-white mb-2 line-clamp-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
-                {item.title}
-              </h3>
-              {item.description && (
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2 line-clamp-2">
-                  {item.description}
-                </p>
+              {item.urlToImage && (
+                <img
+                  src={item.urlToImage}
+                  alt={item.title}
+                  className="w-24 h-24 object-cover rounded-lg flex-shrink-0"
+                  onError={(e) => {
+                    // Hide image if it fails to load
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
               )}
-              <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-500">
-                <span className="font-medium">{item.source}</span>
-                <span>{item.publishedDate || new Date(item.publishedAt).toLocaleDateString()}</span>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-semibold text-gray-900 dark:text-white mb-2 line-clamp-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+                  {item.title}
+                </h3>
+                {item.description && (
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-2 line-clamp-2">
+                    {item.description}
+                  </p>
+                )}
+                <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-500">
+                  <span className="font-medium">{item.source}</span>
+                  <span>{item.publishedDate || new Date(item.publishedAt).toLocaleDateString()}</span>
+                </div>
               </div>
             </div>
           ))
@@ -115,7 +135,7 @@ export default function MarketNews() {
           <button
             onClick={() => handlePageChange(currentPage - 1)}
             disabled={currentPage === 1}
-            className="px-3 py-1 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-1 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Previous
           </button>
@@ -128,7 +148,7 @@ export default function MarketNews() {
                 className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
                   currentPage === page
                     ? 'bg-blue-600 text-white'
-                    : 'text-gray-700 dark:text-gray-300 bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 hover:bg-gray-50 dark:hover:bg-zinc-700'
+                    : 'text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 hover:bg-gray-50 dark:hover:bg-zinc-700'
                 }`}
               >
                 {page}
@@ -139,7 +159,7 @@ export default function MarketNews() {
           <button
             onClick={() => handlePageChange(currentPage + 1)}
             disabled={currentPage === totalPages}
-            className="px-3 py-1 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-1 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 rounded-md hover:bg-gray-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             Next
           </button>

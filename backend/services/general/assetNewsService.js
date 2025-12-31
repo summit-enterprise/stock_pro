@@ -25,51 +25,27 @@ const initRedis = async () => {
 // Cache TTL: 2.5 hours (9000 seconds)
 const ASSET_NEWS_CACHE_TTL = 9000;
 
-// Helper function to fetch asset-specific news from NewsAPI
+// Helper function to fetch asset-specific news (RSS first, then free mock data)
 async function fetchAssetNewsFromAPI(symbol) {
-  const apiKey = process.env.NEWS_API_KEY || process.env.NEWSAPI_KEY;
-  
-  if (!apiKey) {
-    console.warn(`NEWS_API_KEY not set, using mock asset news data for ${symbol}`);
-    return generateMockAssetNews(symbol);
-  }
-
+  // Priority 1: Try RSS feeds (free, no API key required)
   try {
-    // Fetch news for specific company/symbol
-    // Using 'everything' endpoint with symbol/company name in query
-    const newsUrl = `https://newsapi.org/v2/everything?q=${encodeURIComponent(symbol)}&language=en&sortBy=publishedAt&pageSize=30&apiKey=${apiKey}`;
+    const rssNewsService = require('./rssNewsService');
+    const rssArticles = await rssNewsService.fetchAssetNews(symbol);
     
-    const response = await axios.get(newsUrl, {
-      timeout: 10000, // 10 second timeout
-    });
-
-    if (response.data && response.data.articles) {
-      // Filter and format articles
-      const articles = response.data.articles
-        .filter(article => article.title && article.url) // Only include valid articles
-        .map((article, index) => ({
-          id: `asset_news_${symbol}_${index}_${Date.now()}`,
-          title: article.title,
-          description: article.description || '',
-          source: article.source?.name || 'Unknown',
-          author: article.author || '',
-          url: article.url,
-          urlToImage: article.urlToImage || null,
-          publishedAt: article.publishedAt,
-          publishedDate: new Date(article.publishedAt).toLocaleDateString(),
-          publishedTime: new Date(article.publishedAt).toLocaleTimeString(),
-        }))
-        .slice(0, 30); // Ensure we have up to 30 articles
-
-      return articles.length > 0 ? articles : generateMockAssetNews(symbol);
+    if (rssArticles && rssArticles.length > 0) {
+      console.log(`✅ Using RSS news for ${symbol} (${rssArticles.length} articles)`);
+      return rssArticles.slice(0, 30).map((article, index) => ({
+        id: `asset_news_${symbol}_${index}_${Date.now()}`,
+        ...article,
+      }));
     }
-
-    return generateMockAssetNews(symbol);
   } catch (error) {
-    console.error(`Error fetching asset news for ${symbol} from NewsAPI:`, error.message);
-    // Fallback to mock data if API fails
-    return generateMockAssetNews(symbol);
+    console.warn(`RSS news service not available for ${symbol}, falling back to free mock data:`, error.message);
   }
+
+  // Priority 2: Use free mock data (never use paid NewsAPI to avoid costs)
+  console.log(`Using free mock asset news data for ${symbol} (RSS unavailable)`);
+  return generateMockAssetNews(symbol);
 }
 
 // Generate mock asset-specific news data as fallback

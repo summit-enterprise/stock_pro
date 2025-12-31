@@ -6,7 +6,9 @@ import GoogleProvider from "@/components/GoogleOAuthProvider";
 import Navbar from "@/components/Navbar";
 import Sidebar from "@/components/Sidebar";
 import MainContentWrapper from "@/components/MainContentWrapper";
+import Footer from "@/components/Footer";
 import { SidebarProvider } from "@/contexts/SidebarContext";
+import LayoutClient from "@/components/LayoutClient";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,11 +31,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning className="bg-gray-100 dark:bg-black">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-white dark:bg-black text-gray-900 dark:text-white transition-colors`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-100 dark:bg-black text-gray-900 dark:text-white transition-colors`}
       >
-        {/* Initialize theme before React hydration to prevent flash */}
+        {/* Always enable dark mode */}
         <Script
           id="theme-init"
           strategy="beforeInteractive"
@@ -41,13 +43,7 @@ export default function RootLayout({
             __html: `
               (function() {
                 try {
-                  const theme = localStorage.getItem('theme');
-                  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                  if (theme === 'dark' || (!theme && prefersDark)) {
-                    document.documentElement.classList.add('dark');
-                  } else {
-                    document.documentElement.classList.remove('dark');
-                  }
+                  document.documentElement.classList.add('dark');
                 } catch (e) {}
               })();
             `,
@@ -55,11 +51,9 @@ export default function RootLayout({
         />
         <GoogleProvider>
           <SidebarProvider>
-            <Navbar />
-            <Sidebar />
-            <MainContentWrapper>
+            <LayoutClient>
               {children}
-            </MainContentWrapper>
+            </LayoutClient>
           </SidebarProvider>
         </GoogleProvider>
       </body>

@@ -6,6 +6,32 @@
 const { pool } = require('../../db');
 
 /**
+ * Check if asset category supports dividends
+ * Dividends are only available for: Equity, ETF, Bond, MutualFund, InternationalStock
+ * Not available for: Crypto, Commodity, Index
+ */
+async function isDividendSupported(symbol) {
+  try {
+    const result = await pool.query(
+      'SELECT category FROM asset_info WHERE symbol = $1',
+      [symbol]
+    );
+    
+    if (result.rows.length === 0) {
+      return true; // Default to true if asset not found (will fail gracefully)
+    }
+    
+    const category = (result.rows[0].category || '').toLowerCase().trim();
+    const unsupportedCategories = ['crypto', 'cryptocurrency', 'cryptocurrencies', 'commodity', 'commodities', 'index', 'indices'];
+    
+    return !unsupportedCategories.includes(category);
+  } catch (error) {
+    console.warn(`Error checking dividend support for ${symbol}:`, error.message);
+    return true; // Default to true on error
+  }
+}
+
+/**
  * Generate mock dividend data
  */
 function generateMockDividends(symbol) {
@@ -116,6 +142,13 @@ async function cacheDividends(symbol, dividends) {
  * Fetch and sync dividends
  */
 async function fetchAndSyncDividends(symbol) {
+  // Check if this asset category supports dividends
+  const supportsDividends = await isDividendSupported(symbol);
+  if (!supportsDividends) {
+    console.log(`Dividends not supported for ${symbol} (category: crypto/commodity/index)`);
+    return [];
+  }
+
   const dividends = await fetchDividendsFromAPI(symbol);
   await storeDividends(symbol, dividends);
   return dividends;
@@ -125,32 +158,100 @@ async function fetchAndSyncDividends(symbol) {
  * Get dividend statistics
  */
 async function getDividendStats(symbol) {
-  const dividends = await fetchAndSyncDividends(symbol);
-  
-  if (!dividends || dividends.length === 0) {
+  try {
+    // Check if this asset category supports dividends
+    const supportsDividends = await isDividendSupported(symbol);
+    if (!supportsDividends) {
+      return null;
+    }
+    // Get dividends from database
+    const result = await pool.query(
+      `SELECT 
+        COUNT(*) as total_dividends,
+        SUM(amount) as total_paid,
+        AVG(amount) as avg_amount,
+        MIN(amount) as min_amount,
+        MAX(amount) as max_amount,
+        MIN(ex_date) as first_dividend,
+        MAX(ex_date) as last_dividend
+      FROM dividends
+      WHERE symbol = $1`,
+      [symbol]
+    );
+
+    // Get most common frequency separately
+    const frequencyResult = await pool.query(
+      `SELECT frequency, COUNT(*) as count
+       FROM dividends
+       WHERE symbol = $1 AND frequency IS NOT NULL
+       GROUP BY frequency
+       ORDER BY count DESC
+       LIMIT 1`,
+      [symbol]
+    );
+
+    if (result.rows.length === 0 || result.rows[0].total_dividends === '0') {
+      // If no dividends in DB, try to fetch and sync
+      const dividends = await fetchAndSyncDividends(symbol);
+      
+      if (!dividends || dividends.length === 0) {
+        return {
+          totalDividends: 0,
+          totalPaid: 0,
+          avgAmount: 0,
+          minAmount: 0,
+          maxAmount: 0,
+          firstDividend: null,
+          lastDividend: null,
+          frequency: null,
+        };
+      }
+
+      // Calculate from dividends array
+      const amounts = dividends.map(d => parseFloat(d.amount) || 0);
+      const totalPaid = amounts.reduce((sum, amt) => sum + amt, 0);
+      const avgAmount = totalPaid / dividends.length;
+      
+      return {
+        totalDividends: dividends.length,
+        totalPaid: totalPaid,
+        avgAmount: avgAmount,
+        minAmount: Math.min(...amounts),
+        maxAmount: Math.max(...amounts),
+        firstDividend: dividends[dividends.length - 1]?.exDate || null,
+        lastDividend: dividends[0]?.exDate || null,
+        frequency: dividends[0]?.frequency || 'quarterly',
+      };
+    }
+
+    const stats = result.rows[0];
+    const totalPaid = stats.total_paid ? parseFloat(stats.total_paid) : 0;
+    const avgAmount = stats.avg_amount ? parseFloat(stats.avg_amount) : 0;
+    const frequency = frequencyResult.rows.length > 0 ? frequencyResult.rows[0].frequency : null;
+    
+    return {
+      totalDividends: parseInt(stats.total_dividends) || 0,
+      totalPaid: totalPaid,
+      avgAmount: avgAmount,
+      minAmount: stats.min_amount ? parseFloat(stats.min_amount) : 0,
+      maxAmount: stats.max_amount ? parseFloat(stats.max_amount) : 0,
+      firstDividend: stats.first_dividend,
+      lastDividend: stats.last_dividend,
+      frequency: frequency,
+    };
+  } catch (error) {
+    console.error(`Error getting dividend stats for ${symbol}:`, error.message);
     return {
       totalDividends: 0,
-      averageAmount: 0,
+      totalPaid: 0,
+      avgAmount: 0,
+      minAmount: 0,
+      maxAmount: 0,
+      firstDividend: null,
       lastDividend: null,
-      nextDividend: null,
       frequency: null,
-      annualYield: 0
     };
   }
-
-  const total = dividends.reduce((sum, div) => sum + div.amount, 0);
-  const average = total / dividends.length;
-  const lastDividend = dividends[0];
-  const nextDividend = dividends.length > 1 ? dividends[1] : null;
-
-  return {
-    totalDividends: dividends.length,
-    averageAmount: average,
-    lastDividend,
-    nextDividend,
-    frequency: lastDividend.frequency || 'quarterly',
-    annualYield: (average * 4) / 100 // Rough estimate
-  };
 }
 
 module.exports = {
@@ -160,6 +261,7 @@ module.exports = {
   cacheDividends,
   fetchAndSyncDividends,
   getDividendStats,
+  isDividendSupported,
   generateMockDividends
 };
 

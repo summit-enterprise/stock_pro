@@ -303,32 +303,67 @@ async function getDividendStats(symbol) {
         MIN(amount) as min_amount,
         MAX(amount) as max_amount,
         MIN(ex_date) as first_dividend,
-        MAX(ex_date) as last_dividend,
-        frequency
+        MAX(ex_date) as last_dividend
       FROM dividends
-      WHERE symbol = $1
-      GROUP BY frequency`,
+      WHERE symbol = $1`,
       [symbol]
     );
 
-    if (result.rows.length === 0) {
+    // Get most common frequency separately
+    const frequencyResult = await pool.query(
+      `SELECT frequency, COUNT(*) as count
+       FROM dividends
+       WHERE symbol = $1 AND frequency IS NOT NULL
+       GROUP BY frequency
+       ORDER BY count DESC
+       LIMIT 1`,
+      [symbol]
+    );
+
+    if (result.rows.length === 0 || result.rows[0].total_dividends === '0') {
       return null;
     }
 
     const stats = result.rows[0];
+    const totalPaid = stats.total_paid ? parseFloat(stats.total_paid) : 0;
+    const avgAmount = stats.avg_amount ? parseFloat(stats.avg_amount) : 0;
+    const frequency = frequencyResult.rows.length > 0 ? frequencyResult.rows[0].frequency : null;
+    
     return {
-      totalDividends: parseInt(stats.total_dividends),
-      totalPaid: parseFloat(stats.total_paid),
-      avgAmount: parseFloat(stats.avg_amount),
-      minAmount: parseFloat(stats.min_amount),
-      maxAmount: parseFloat(stats.max_amount),
+      totalDividends: parseInt(stats.total_dividends) || 0,
+      totalPaid: totalPaid,
+      avgAmount: avgAmount,
+      minAmount: stats.min_amount ? parseFloat(stats.min_amount) : 0,
+      maxAmount: stats.max_amount ? parseFloat(stats.max_amount) : 0,
       firstDividend: stats.first_dividend,
       lastDividend: stats.last_dividend,
-      frequency: stats.frequency,
+      frequency: frequency,
     };
   } catch (error) {
     console.error(`Error getting dividend stats for ${symbol}:`, error.message);
-    return null;
+    // Fallback: calculate from dividends array
+    try {
+      const dividends = await getDividendsFromDB(symbol);
+      if (dividends.length === 0) return null;
+      
+      const amounts = dividends.map(d => parseFloat(d.amount));
+      const totalPaid = amounts.reduce((sum, amt) => sum + amt, 0);
+      const avgAmount = totalPaid / dividends.length;
+      
+      return {
+        totalDividends: dividends.length,
+        totalPaid: totalPaid,
+        avgAmount: avgAmount,
+        minAmount: Math.min(...amounts),
+        maxAmount: Math.max(...amounts),
+        firstDividend: dividends[dividends.length - 1].exDate,
+        lastDividend: dividends[0].exDate,
+        frequency: dividends[0].frequency || null,
+      };
+    } catch (fallbackError) {
+      console.error(`Fallback calculation also failed:`, fallbackError.message);
+      return null;
+    }
   }
 }
 

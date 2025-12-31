@@ -7,6 +7,32 @@ const { pool } = require('../../db');
 
 const filingTypes = ['10-K', '10-Q', '8-K', '13F', 'DEF 14A', 'S-1', 'S-3'];
 
+/**
+ * Check if asset category supports filings
+ * Filings are only available for: Equity, ETF, Bond, MutualFund, InternationalStock
+ * Not available for: Crypto, Commodity, Index
+ */
+async function isFilingSupported(symbol) {
+  try {
+    const result = await pool.query(
+      'SELECT category FROM asset_info WHERE symbol = $1',
+      [symbol]
+    );
+    
+    if (result.rows.length === 0) {
+      return true; // Default to true if asset not found (will fail gracefully)
+    }
+    
+    const category = (result.rows[0].category || '').toLowerCase().trim();
+    const unsupportedCategories = ['crypto', 'cryptocurrency', 'cryptocurrencies', 'commodity', 'commodities', 'index', 'indices'];
+    
+    return !unsupportedCategories.includes(category);
+  } catch (error) {
+    console.warn(`Error checking filing support for ${symbol}:`, error.message);
+    return true; // Default to true on error
+  }
+}
+
 function generateMockFilings(symbol) {
   const filings = [];
   const today = new Date();
@@ -68,6 +94,13 @@ async function storeFilings(symbol, filings) {
 }
 
 async function fetchAndSyncFilings(symbol) {
+  // Check if this asset category supports filings
+  const supportsFilings = await isFilingSupported(symbol);
+  if (!supportsFilings) {
+    console.log(`Filings not supported for ${symbol} (category: crypto/commodity/index)`);
+    return [];
+  }
+
   const filings = await fetchFilingsFromAPI(symbol);
   await storeFilings(symbol, filings);
   return filings;
@@ -75,6 +108,11 @@ async function fetchAndSyncFilings(symbol) {
 
 async function getFilingsStats(symbol) {
   try {
+    // Check if this asset category supports filings
+    const supportsFilings = await isFilingSupported(symbol);
+    if (!supportsFilings) {
+      return null;
+    }
     const result = await pool.query(
       `SELECT filing_type, COUNT(*) as count, MAX(filing_date) as last_filing
        FROM filings
@@ -99,6 +137,7 @@ module.exports = {
   generateMockFilings,
   storeFilings,
   fetchAndSyncFilings,
-  getFilingsStats
+  getFilingsStats,
+  isFilingSupported
 };
 

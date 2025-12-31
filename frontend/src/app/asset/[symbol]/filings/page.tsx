@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
+import ProtectedRoute from '@/components/ProtectedRoute';
 
 interface Filing {
   id?: number;
@@ -32,6 +33,8 @@ export default function FilingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filterType, setFilterType] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   useEffect(() => {
     if (symbol) {
@@ -44,14 +47,30 @@ export default function FilingsPage() {
     setError('');
     
     try {
-      const url = filterType 
-        ? `http://localhost:3001/api/assets/${symbol}/filings?type=${filterType}`
-        : `http://localhost:3001/api/assets/${symbol}/filings`;
+      const token = localStorage.getItem('token');
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
       
-      const response = await fetch(url);
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const encodedSymbol = encodeURIComponent(symbol);
+      const params = new URLSearchParams();
+      if (filterType) params.append('type', filterType);
+      if (searchQuery) params.append('search', searchQuery);
+      params.append('sortOrder', sortOrder);
+      
+      const url = `http://localhost:3001/api/assets/${encodedSymbol}/filings?${params.toString()}`;
+      
+      const response = await fetch(url, { headers });
       
       if (!response.ok) {
-        throw new Error('Failed to fetch filings data');
+        if (response.status === 401) {
+          throw new Error('Authentication required. Please log in.');
+        }
+        throw new Error(`Failed to fetch filings data: ${response.status}`);
       }
       
       const data = await response.json();
@@ -65,10 +84,10 @@ export default function FilingsPage() {
   };
 
   useEffect(() => {
-    if (filterType !== undefined) {
+    if (symbol) {
       fetchFilings();
     }
-  }, [filterType]);
+  }, [filterType, searchQuery, sortOrder, symbol]);
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'N/A';
@@ -121,7 +140,8 @@ export default function FilingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-black pt-16">
+    <ProtectedRoute>
+      <div className="min-h-screen bg-white dark:bg-black pt-16">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Back Button */}
         <Link 
@@ -145,7 +165,7 @@ export default function FilingsPage() {
         {stats.length > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             {stats.map((stat) => (
-              <div key={stat.filingType} className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+              <div key={stat.filingType} className="bg-gray-100 dark:bg-zinc-900 rounded-lg p-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">{stat.filingType}</p>
                 <p className="text-2xl font-bold text-gray-900 dark:text-white">
                   {stat.count}
@@ -158,29 +178,61 @@ export default function FilingsPage() {
           </div>
         )}
 
-        {/* Filter */}
-        {uniqueFilingTypes.length > 0 && (
-          <div className="mb-6">
+        {/* Search and Filter Controls */}
+        <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Search */}
+          <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Filter by Filing Type
+              Search:
+            </label>
+            <input
+              type="text"
+              placeholder="Search by filing type or description..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          
+          {/* Filter by Type */}
+          {uniqueFilingTypes.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Filter by Filing Type:
+              </label>
+              <select
+                value={filterType}
+                onChange={(e) => setFilterType(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All Types</option>
+                {uniqueFilingTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          
+          {/* Sort Order */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Sort by Date:
             </label>
             <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="bg-white dark:bg-zinc-900 border border-gray-300 dark:border-zinc-700 rounded-lg px-4 py-2 text-gray-900 dark:text-white"
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              className="w-full px-4 py-2 border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="">All Types</option>
-              {uniqueFilingTypes.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
             </select>
           </div>
-        )}
+        </div>
 
         {/* Filings Table */}
-        <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+        <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
             Filing History
           </h2>
@@ -258,7 +310,8 @@ export default function FilingsPage() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </ProtectedRoute>
   );
 }
 

@@ -99,9 +99,17 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400"
+              className="group relative w-full flex justify-center py-3 px-5 border border-transparent text-sm font-semibold rounded-xl text-white bg-blue-600 dark:bg-blue-700 overflow-hidden transition-all duration-300
+                hover:bg-blue-700 dark:hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30
+                focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:focus:ring-offset-zinc-900
+                disabled:bg-gray-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed disabled:hover:shadow-none
+                active:scale-[0.98] tracking-tight"
             >
-              {loading ? 'Signing in...' : 'Sign in'}
+              <span className="relative z-10">{loading ? 'Signing in...' : 'Sign in'}</span>
+              {!loading && (
+                <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                  translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+              )}
             </button>
           </div>
         </form>

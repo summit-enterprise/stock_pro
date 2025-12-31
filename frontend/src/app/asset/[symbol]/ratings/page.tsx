@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
+import ProtectedRoute from '@/components/ProtectedRoute';
 
 interface IndividualRating {
   id?: number;
@@ -48,12 +49,26 @@ export default function RatingsPage() {
     setError('');
     
     try {
+      const token = localStorage.getItem('token');
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const encodedSymbol = encodeURIComponent(symbol);
       const response = await fetch(
-        `http://localhost:3001/api/assets/${symbol}/ratings`
+        `http://localhost:3001/api/assets/${encodedSymbol}/ratings`,
+        { headers }
       );
       
       if (!response.ok) {
-        throw new Error('Failed to fetch ratings data');
+        if (response.status === 401) {
+          throw new Error('Authentication required. Please log in.');
+        }
+        throw new Error(`Failed to fetch ratings data: ${response.status}`);
       }
       
       const data = await response.json();
@@ -138,7 +153,8 @@ export default function RatingsPage() {
     : 0;
 
   return (
-    <div className="min-h-screen bg-white dark:bg-black pt-16">
+    <ProtectedRoute>
+      <div className="min-h-screen bg-white dark:bg-black pt-16">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Back Button */}
         <Link 
@@ -160,7 +176,7 @@ export default function RatingsPage() {
 
         {/* Consensus Section */}
         {consensus && (
-          <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6 mb-8">
+          <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6 mb-8">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
               Consensus Rating
             </h2>
@@ -265,7 +281,7 @@ export default function RatingsPage() {
         )}
 
         {/* Individual Ratings Table */}
-        <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+        <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
             Individual Analyst Ratings
           </h2>
@@ -336,7 +352,8 @@ export default function RatingsPage() {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </ProtectedRoute>
   );
 }
 

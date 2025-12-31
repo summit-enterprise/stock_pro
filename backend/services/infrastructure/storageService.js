@@ -400,14 +400,15 @@ async function getSignedUrl(
     const bucket = await getBucket(bucketName);
     const file = bucket.file(destinationPath);
 
+    const expiresIn = options.expires || Date.now() + 60 * 60 * 1000; // 1 hour default
+    
     const [url] = await file.getSignedUrl({
       version: 'v4',
       action: 'read',
-      expires: options.expires || Date.now() + 60 * 60 * 1000, // 1 hour default
-      ...options,
+      expires: expiresIn,
     });
 
-    return { url, expires: options.expires };
+    return { url, expires: expiresIn };
   } catch (error) {
     console.error('Signed URL error:', error.message);
     throw error;

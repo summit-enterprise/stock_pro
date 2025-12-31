@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const { verifyToken } = require('../middleware/auth');
 const youtubeService = require('../services/general/youtubeService');
 
 // Check live status for a single channel
-router.get('/channel/:channelId/status', async (req, res) => {
+router.get('/channel/:channelId/status', verifyToken, async (req, res) => {
   try {
     const { channelId } = req.params;
     const status = await youtubeService.checkChannelLiveStatus(channelId);
@@ -20,7 +21,7 @@ router.get('/channel/:channelId/status', async (req, res) => {
 });
 
 // Batch check multiple channels
-router.post('/channels/status', async (req, res) => {
+router.post('/channels/status', verifyToken, async (req, res) => {
   try {
     const { channelIds } = req.body;
     

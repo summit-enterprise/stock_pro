@@ -24,7 +24,7 @@ const verifyToken = async (req, res, next) => {
 router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT p.symbol, ai.name, ai.type, ai.exchange, ai.logo_url, p.shares_owned, p.avg_share_price, p.updated_at
+      `SELECT p.symbol, ai.name, ai.type, ai.category, ai.exchange, ai.logo_url, p.shares_owned, p.avg_share_price, p.updated_at
        FROM portfolio p
        LEFT JOIN asset_info ai ON p.symbol = ai.symbol
        WHERE p.user_id = $1
@@ -76,10 +76,14 @@ router.get('/', verifyToken, async (req, res) => {
           const profitLoss = totalMarketValue - totalCost;
           const profitLossPercent = totalCost !== 0 ? ((profitLoss / totalCost) * 100) : 0;
 
+          const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+          const category = row.category || normalizeCategory(determineCategory(row.symbol, row.type, row.exchange)) || 'Unknown';
+          
           return {
             symbol: row.symbol,
             name: row.name || row.symbol,
             type: row.type,
+            category: category,
             exchange: row.exchange,
             logoUrl: row.logo_url || null,
             sharesOwned: sharesOwned,
@@ -100,10 +104,14 @@ router.get('/', verifyToken, async (req, res) => {
           const avgSharePrice = parseFloat(row.avg_share_price) || 0;
           const totalCost = avgSharePrice * sharesOwned;
 
+          const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+          const category = row.category || normalizeCategory(determineCategory(row.symbol, row.type, row.exchange)) || 'Unknown';
+          
           return {
             symbol: row.symbol,
             name: row.name || row.symbol,
             type: row.type,
+            category: category,
             exchange: row.exchange,
             logoUrl: row.logo_url || null,
             sharesOwned: sharesOwned,
@@ -140,6 +148,46 @@ router.post('/', verifyToken, async (req, res) => {
     const shares = parseFloat(sharesOwned) || 0;
     const avgPrice = parseFloat(avgSharePrice) || 0;
 
+    // Verify user exists in database
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [req.userId]);
+    if (userCheck.rows.length === 0) {
+      console.error(`User ${req.userId} from token does not exist in database`);
+      return res.status(404).json({ error: 'User not found', message: 'User account does not exist' });
+    }
+
+    // Ensure asset_info exists for this symbol
+    const assetCheck = await pool.query('SELECT symbol FROM asset_info WHERE symbol = $1', [symbol]);
+    if (assetCheck.rows.length === 0) {
+      // Create asset_info entry if it doesn't exist
+      const { determineCategory, normalizeCategory } = require('../utils/categoryUtils');
+      
+      // Determine exchange and category based on symbol
+      let exchange = 'NYSE'; // Default
+      let assetType = 'stock';
+      let assetName = symbol;
+      
+      // Check if it's a crypto (starts with X:)
+      if (symbol.startsWith('X:')) {
+        exchange = 'CoinGecko';
+        assetType = 'crypto';
+        // Extract crypto symbol (remove X: and USD suffix)
+        const cryptoSymbol = symbol.replace(/^X:/, '').replace(/USD$/, '');
+        assetName = `${cryptoSymbol} (Crypto)`;
+      }
+      
+      const category = normalizeCategory(determineCategory(symbol, assetType, exchange)) || 'Unknown';
+      
+      await pool.query(
+        `INSERT INTO asset_info (symbol, name, type, category, exchange, currency, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+         ON CONFLICT (symbol) DO UPDATE SET 
+           category = EXCLUDED.category,
+           type = EXCLUDED.type,
+           exchange = EXCLUDED.exchange`,
+        [symbol, assetName, assetType, category, exchange, 'USD']
+      );
+    }
+
     // Check if record exists first
     const existing = await pool.query(
       'SELECT * FROM portfolio WHERE user_id = $1 AND symbol = $2',
@@ -147,21 +195,18 @@ router.post('/', verifyToken, async (req, res) => {
     );
 
     if (existing.rows.length > 0) {
-      // Update existing record - update both old and new columns for compatibility
+      // Update existing record
       await pool.query(
         `UPDATE portfolio 
-         SET shares_owned = $1, avg_share_price = $2, 
-             quantity = COALESCE(quantity, $1), purchase_price = COALESCE(purchase_price, $2),
-             updated_at = CURRENT_TIMESTAMP
+         SET shares_owned = $1, avg_share_price = $2, updated_at = CURRENT_TIMESTAMP
          WHERE user_id = $3 AND symbol = $4`,
         [shares, avgPrice, req.userId, symbol]
       );
     } else {
-      // Insert new record - include old columns if they exist, use new column values
-      // Use NULL for purchase_date if it exists (now nullable)
+      // Insert new record - only use new columns (shares_owned, avg_share_price)
       await pool.query(
-        `INSERT INTO portfolio (user_id, symbol, shares_owned, avg_share_price, quantity, purchase_price, purchase_date, updated_at)
-         VALUES ($1, $2, $3, $4, $3, $4, NULL, CURRENT_TIMESTAMP)`,
+        `INSERT INTO portfolio (user_id, symbol, shares_owned, avg_share_price, updated_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
         [req.userId, symbol, shares, avgPrice]
       );
     }
@@ -169,6 +214,15 @@ router.post('/', verifyToken, async (req, res) => {
     res.json({ message: 'Portfolio updated successfully' });
   } catch (error) {
     console.error('Add/Update portfolio error:', error);
+    
+    // Handle foreign key constraint violation
+    if (error.code === '23503') {
+      return res.status(404).json({ 
+        error: 'Asset or user not found', 
+        message: 'The asset or user account does not exist. Please try again.' 
+      });
+    }
+    
     res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });
@@ -331,7 +385,7 @@ router.get('/summary', verifyToken, async (req, res) => {
 // Get portfolio performance history
 router.get('/performance', verifyToken, async (req, res) => {
   try {
-    const { timeRange = '1Y', symbols } = req.query;
+    const { timeRange = '1Y', symbols, startDate: customStartDate, endDate: customEndDate } = req.query;
     
     // Get user's portfolio holdings
     const holdingsResult = await pool.query(
@@ -354,21 +408,34 @@ router.get('/performance', verifyToken, async (req, res) => {
       return res.json({ data: [] });
     }
 
-    // Calculate date range
+    // Calculate date range - use custom dates if provided, otherwise use timeRange
     const now = new Date();
     let startDate = new Date();
-    const daysMap = {
-      '1D': 1,
-      '1W': 7,
-      '1M': 30,
-      '3M': 90,
-      '6M': 180,
-      '1Y': 365,
-      '5Y': 1825,
-      'MAX': 1825, // Max 5 years for now
-    };
-    const days = daysMap[timeRange] || 365;
-    startDate.setDate(startDate.getDate() - days);
+    let endDate = now;
+    
+    if (customStartDate && customEndDate) {
+      // Use custom date range
+      startDate = new Date(customStartDate);
+      endDate = new Date(customEndDate);
+      // Ensure endDate is not in the future
+      if (endDate > now) {
+        endDate = now;
+      }
+    } else {
+      // Use time range
+      const daysMap = {
+        '1D': 1,
+        '1W': 7,
+        '1M': 30,
+        '3M': 90,
+        '6M': 180,
+        '1Y': 365,
+        '5Y': 1825,
+        'MAX': 1825, // Max 5 years for now
+      };
+      const days = daysMap[timeRange] || 365;
+      startDate.setDate(startDate.getDate() - days);
+    }
 
     const symbolList = holdings.map(h => h.symbol);
     
@@ -380,7 +447,7 @@ router.get('/performance', verifyToken, async (req, res) => {
          AND date >= $2 
          AND date <= $3 
        ORDER BY symbol, date ASC`,
-      [symbolList, startDate.toISOString().split('T')[0], now.toISOString().split('T')[0]]
+      [symbolList, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]]
     );
 
     // Organize data by symbol and date for quick lookup

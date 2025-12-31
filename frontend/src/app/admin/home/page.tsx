@@ -357,9 +357,13 @@ export default function AdminHome() {
                 setShowCreateAdmin(false);
                 setShowCreateSuperuser(false);
               }}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              className="group relative px-5 py-2.5 text-sm font-semibold bg-blue-600 dark:bg-blue-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                hover:bg-blue-700 dark:hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30
+                active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
             >
-              {showCreateUser ? 'Cancel' : 'Create Regular User'}
+              <span className="relative z-10">{showCreateUser ? 'Cancel' : 'Create Regular User'}</span>
+              <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
             </button>
             <button
               onClick={() => {
@@ -367,9 +371,13 @@ export default function AdminHome() {
                 setShowCreateUser(false);
                 setShowCreateSuperuser(false);
               }}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+              className="group relative px-5 py-2.5 text-sm font-semibold bg-green-600 dark:bg-green-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                hover:bg-green-700 dark:hover:bg-green-600 hover:shadow-xl hover:shadow-green-500/30
+                active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
             >
-              {showCreateAdmin ? 'Cancel' : 'Create Admin'}
+              <span className="relative z-10">{showCreateAdmin ? 'Cancel' : 'Create Admin'}</span>
+              <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
             </button>
             <button
               onClick={() => {
@@ -377,9 +385,13 @@ export default function AdminHome() {
                 setShowCreateUser(false);
                 setShowCreateAdmin(false);
               }}
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              className="group relative px-5 py-2.5 text-sm font-semibold bg-purple-600 dark:bg-purple-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                hover:bg-purple-700 dark:hover:bg-purple-600 hover:shadow-xl hover:shadow-purple-500/30
+                active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
             >
-              {showCreateSuperuser ? 'Cancel' : 'Create Superuser'}
+              <span className="relative z-10">{showCreateSuperuser ? 'Cancel' : 'Create Superuser'}</span>
+              <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
             </button>
           </div>
         )}
@@ -423,8 +435,19 @@ export default function AdminHome() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg dark:bg-zinc-800 dark:border-zinc-700 dark:text-white"
                 />
               </div>
-              <button type="submit" disabled={creatingUser} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400">
-                {creatingUser ? 'Creating...' : 'Create User'}
+              <button 
+                type="submit" 
+                disabled={creatingUser} 
+                className="group relative px-5 py-2.5 text-sm font-semibold bg-blue-600 dark:bg-blue-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                  hover:bg-blue-700 dark:hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30
+                  disabled:bg-gray-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed disabled:hover:shadow-none
+                  active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+              >
+                <span className="relative z-10">{creatingUser ? 'Creating...' : 'Create User'}</span>
+                {!creatingUser && (
+                  <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                    translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+                )}
               </button>
             </form>
           </div>
@@ -460,8 +483,19 @@ export default function AdminHome() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg dark:bg-zinc-800 dark:border-zinc-700 dark:text-white"
                 />
               </div>
-              <button type="submit" disabled={creatingAdmin} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400">
-                {creatingAdmin ? 'Creating...' : 'Create Admin'}
+              <button 
+                type="submit" 
+                disabled={creatingAdmin} 
+                className="group relative px-5 py-2.5 text-sm font-semibold bg-green-600 dark:bg-green-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                  hover:bg-green-700 dark:hover:bg-green-600 hover:shadow-xl hover:shadow-green-500/30
+                  disabled:bg-gray-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed disabled:hover:shadow-none
+                  active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+              >
+                <span className="relative z-10">{creatingAdmin ? 'Creating...' : 'Create Admin'}</span>
+                {!creatingAdmin && (
+                  <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                    translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+                )}
               </button>
             </form>
           </div>
@@ -506,8 +540,19 @@ export default function AdminHome() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg dark:bg-zinc-800 dark:border-zinc-700 dark:text-white"
                 />
               </div>
-              <button type="submit" disabled={creatingSuperuser} className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400">
-                {creatingSuperuser ? 'Creating...' : 'Create Superuser'}
+              <button 
+                type="submit" 
+                disabled={creatingSuperuser} 
+                className="group relative px-5 py-2.5 text-sm font-semibold bg-purple-600 dark:bg-purple-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                  hover:bg-purple-700 dark:hover:bg-purple-600 hover:shadow-xl hover:shadow-purple-500/30
+                  disabled:bg-gray-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed disabled:hover:shadow-none
+                  active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+              >
+                <span className="relative z-10">{creatingSuperuser ? 'Creating...' : 'Create Superuser'}</span>
+                {!creatingSuperuser && (
+                  <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                    translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+                )}
               </button>
             </form>
           </div>
@@ -599,11 +644,11 @@ export default function AdminHome() {
               <button
                 onClick={() => setUserCurrentPage(prev => Math.max(1, prev - 1))}
                 disabled={userCurrentPage === 1 || userPaginationDisabled}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 dark:border-zinc-700 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
               >
                 Previous
               </button>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 {Array.from({ length: userTotalPages }, (_, i) => i + 1).map((page) => {
                   const isActive = userCurrentPage === page;
                   return (
@@ -611,13 +656,13 @@ export default function AdminHome() {
                       key={page}
                       onClick={() => !userPaginationDisabled && setUserCurrentPage(page)}
                       disabled={userPaginationDisabled}
-                      className={`px-3 py-1 rounded ${
+                      className={`px-4 py-2 text-sm font-semibold rounded-xl transition-all duration-300 tracking-tight ${
                         isActive
-                          ? 'bg-blue-600 text-white'
+                          ? 'bg-blue-600 dark:bg-blue-700 text-white hover:shadow-xl hover:shadow-blue-500/30'
                           : userPaginationDisabled
-                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed dark:bg-zinc-700'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-zinc-800 dark:text-gray-300 dark:hover:bg-zinc-700'
-                      }`}
+                          ? 'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                          : 'text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600'
+                      } active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-zinc-900`}
                     >
                       {page}
                     </button>
@@ -627,7 +672,7 @@ export default function AdminHome() {
               <button
                 onClick={() => setUserCurrentPage(prev => Math.min(userTotalPages, prev + 1))}
                 disabled={userCurrentPage === userTotalPages || userPaginationDisabled}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 dark:border-zinc-700 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
               >
                 Next
               </button>
@@ -727,11 +772,11 @@ export default function AdminHome() {
               <button
                 onClick={() => setAdminCurrentPage(prev => Math.max(1, prev - 1))}
                 disabled={adminCurrentPage === 1 || adminPaginationDisabled}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 dark:border-zinc-700 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
               >
                 Previous
               </button>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 {Array.from({ length: adminTotalPages }, (_, i) => i + 1).map((page) => {
                   const isActive = adminCurrentPage === page;
                   return (
@@ -739,13 +784,13 @@ export default function AdminHome() {
                       key={page}
                       onClick={() => !adminPaginationDisabled && setAdminCurrentPage(page)}
                       disabled={adminPaginationDisabled}
-                      className={`px-3 py-1 rounded ${
+                      className={`px-4 py-2 text-sm font-semibold rounded-xl transition-all duration-300 tracking-tight ${
                         isActive
-                          ? 'bg-blue-600 text-white'
+                          ? 'bg-blue-600 dark:bg-blue-700 text-white hover:shadow-xl hover:shadow-blue-500/30'
                           : adminPaginationDisabled
-                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed dark:bg-zinc-700'
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-zinc-800 dark:text-gray-300 dark:hover:bg-zinc-700'
-                      }`}
+                          ? 'bg-gray-200 dark:bg-zinc-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                          : 'text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600'
+                      } active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-zinc-900`}
                     >
                       {page}
                     </button>
@@ -755,7 +800,7 @@ export default function AdminHome() {
               <button
                 onClick={() => setAdminCurrentPage(prev => Math.min(adminTotalPages, prev + 1))}
                 disabled={adminCurrentPage === adminTotalPages || adminPaginationDisabled}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 dark:border-zinc-700 dark:hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 text-sm font-semibold text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
               >
                 Next
               </button>

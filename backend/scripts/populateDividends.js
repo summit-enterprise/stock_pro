@@ -1,106 +1,103 @@
 /**
- * Populate dividends for all equities in the database
- * Fetches dividend data from Polygon.io API and stores in PostgreSQL
- * 
- * Run: node backend/scripts/populateDividends.js
+ * Populate Mock Dividends Script
+ * Generates and stores mock dividend data for all assets in the database
  */
 
 require('dotenv').config();
 const { pool } = require('../db');
-const dividendService = require('../services/stocks/dividendService');
+const { dividendService } = require('../services');
 
 async function populateDividends() {
+  console.log('\n🔄 Starting dividend population...\n');
+
   try {
-    console.log('🚀 Starting dividend population...\n');
+    // Get all assets from asset_info (excluding crypto)
+    const result = await pool.query(`
+      SELECT DISTINCT symbol, type 
+      FROM asset_info 
+      WHERE type != 'crypto' AND type != 'cryptocurrency'
+      ORDER BY symbol
+    `);
 
-    // Get all equity symbols from asset_info
-    const result = await pool.query(
-      `SELECT symbol FROM asset_info 
-       WHERE type = 'stock' OR type = 'CS' OR type = 'ETF'
-       ORDER BY symbol`
-    );
-
-    const symbols = result.rows.map(row => row.symbol);
-    console.log(`Found ${symbols.length} equities to process\n`);
+    const assets = result.rows;
+    console.log(`Found ${assets.length} assets to populate dividends for\n`);
 
     let successCount = 0;
+    let skipCount = 0;
     let errorCount = 0;
-    let skippedCount = 0;
 
-    // Process in batches to avoid rate limits
-    const batchSize = 5;
-    for (let i = 0; i < symbols.length; i += batchSize) {
-      const batch = symbols.slice(i, i + batchSize);
+    // Process assets in batches to avoid overwhelming the database
+    const batchSize = 10;
+    for (let i = 0; i < assets.length; i += batchSize) {
+      const batch = assets.slice(i, i + batchSize);
       
-      await Promise.all(
-        batch.map(async (symbol) => {
-          try {
-            console.log(`Processing ${symbol}...`);
-            
-            // Fetch and sync dividends
-            const dividends = await dividendService.fetchAndSyncDividends(symbol);
-            
-            if (dividends.length > 0) {
-              console.log(`  ✅ ${symbol}: ${dividends.length} dividends`);
-              successCount++;
-            } else {
-              console.log(`  ⚠️  ${symbol}: No dividends found`);
-              skippedCount++;
-            }
+      const batchPromises = batch.map(async (asset) => {
+        try {
+          const { symbol } = asset;
+          
+          // Check if dividends already exist
+          const existingCheck = await pool.query(
+            'SELECT COUNT(*) as count FROM dividends WHERE symbol = $1',
+            [symbol]
+          );
 
-            // Small delay to respect rate limits
-            await new Promise(resolve => setTimeout(resolve, 200));
-          } catch (error) {
-            console.error(`  ❌ ${symbol}: ${error.message}`);
-            errorCount++;
+          if (parseInt(existingCheck.rows[0].count) > 0) {
+            console.log(`⏭️  Skipping ${symbol} - dividends already exist`);
+            skipCount++;
+            return;
           }
-        })
-      );
 
-      // Progress update
-      const progress = ((i + batch.length) / symbols.length * 100).toFixed(1);
-      console.log(`\nProgress: ${i + batch.length}/${symbols.length} (${progress}%)\n`);
+          // Generate and store mock dividends using the dividend service
+          console.log(`📊 Generating dividends for ${symbol}...`);
+          const dividends = await dividendService.fetchAndSyncDividends(symbol);
+          
+          if (dividends && dividends.length > 0) {
+            console.log(`✅ Stored ${dividends.length} dividends for ${symbol}`);
+            successCount++;
+          } else {
+            console.log(`⚠️  No dividends generated for ${symbol} (may be crypto or non-dividend stock)`);
+            skipCount++;
+          }
+        } catch (error) {
+          console.error(`❌ Error processing ${asset.symbol}:`, error.message);
+          errorCount++;
+        }
+      });
 
-      // Delay between batches to respect rate limits
-      if (i + batchSize < symbols.length) {
-        console.log('Waiting 2 seconds before next batch...\n');
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      await Promise.all(batchPromises);
+      
+      // Small delay between batches
+      if (i + batchSize < assets.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 
-    // Summary
-    console.log('\n✅ Dividend population completed!\n');
-    console.log('Summary:');
-    console.log(`  - Success: ${successCount}`);
-    console.log(`  - Skipped (no dividends): ${skippedCount}`);
-    console.log(`  - Errors: ${errorCount}`);
-    console.log(`  - Total: ${symbols.length}\n`);
-
-    // Show statistics
-    const statsResult = await pool.query(
-      `SELECT 
-        COUNT(DISTINCT symbol) as symbols_with_dividends,
-        COUNT(*) as total_dividends,
-        SUM(amount) as total_amount
-      FROM dividends`
-    );
-
-    if (statsResult.rows[0]) {
-      const stats = statsResult.rows[0];
-      console.log('Database Statistics:');
-      console.log(`  - Symbols with dividends: ${stats.symbols_with_dividends}`);
-      console.log(`  - Total dividend records: ${stats.total_dividends}`);
-      console.log(`  - Total amount: $${parseFloat(stats.total_amount || 0).toFixed(2)}\n`);
-    }
+    console.log('\n' + '='.repeat(50));
+    console.log('📊 Dividend Population Summary:');
+    console.log(`✅ Success: ${successCount} assets`);
+    console.log(`⏭️  Skipped: ${skipCount} assets`);
+    console.log(`❌ Errors: ${errorCount} assets`);
+    console.log('='.repeat(50) + '\n');
 
   } catch (error) {
-    console.error('❌ Population failed:', error);
+    console.error('Fatal error:', error);
     process.exit(1);
   } finally {
     await pool.end();
   }
 }
 
-// Run population
-populateDividends();
+// Run the script
+if (require.main === module) {
+  populateDividends()
+    .then(() => {
+      console.log('✅ Dividend population completed');
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error('❌ Dividend population failed:', error);
+      process.exit(1);
+    });
+}
 
+module.exports = { populateDividends };

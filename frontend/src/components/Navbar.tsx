@@ -2,8 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link';
+import Image from 'next/image';
 import LoginModal from './LoginModal';
 import RegisterModal from './RegisterModal';
+import EmailLoginHandler from './EmailLoginHandler';
+import { normalizeAvatarUrl } from '@/utils/imageUtils';
 
 export default function Navbar() {
   const router = useRouter();
@@ -11,12 +15,12 @@ export default function Navbar() {
   const [showLogin, setShowLogin] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     // Check if user is logged in (regular user or admin)
-    const checkAuth = () => {
+    const checkAuth = async () => {
       const token = localStorage.getItem('token');
       const adminToken = localStorage.getItem('adminToken'); // Fixed: was 'admin_token'
       const userStr = localStorage.getItem('user');
@@ -26,7 +30,32 @@ export default function Navbar() {
       // Load user data if available
       if (userStr) {
         try {
-          setUser(JSON.parse(userStr));
+          const parsedUser = JSON.parse(userStr);
+          setUser(parsedUser);
+          
+          // Fetch latest profile to get updated avatar_url
+          if (token) {
+            try {
+              const response = await fetch('http://localhost:3001/api/user/profile', {
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                },
+              });
+              
+              if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.user) {
+                  // Update user with latest data, especially avatar_url
+                  setUser(data.user);
+                  // Update localStorage
+                  localStorage.setItem('user', JSON.stringify(data.user));
+                }
+              }
+            } catch (error) {
+              // Silently fail - use cached user data
+              console.debug('Failed to fetch profile in navbar:', error);
+            }
+          }
         } catch (e) {
           setUser(null);
         }
@@ -54,97 +83,10 @@ export default function Navbar() {
     };
   }, [pathname]);
 
-  // Initialize dark mode from localStorage or system preference
+  // Ensure dark mode is always enabled
   useEffect(() => {
-    const initializeTheme = () => {
-      const storedTheme = localStorage.getItem('theme');
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      
-      // Determine initial theme
-      const shouldBeDark = storedTheme === 'dark' || (!storedTheme && prefersDark);
-      
-      setIsDarkMode(shouldBeDark);
-      
-      // Update DOM immediately
-      if (shouldBeDark) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-    };
-
-    // Initialize immediately
-    initializeTheme();
-
-    // Listen for system theme changes
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const handleSystemThemeChange = (e: MediaQueryListEvent) => {
-      // Only update if user hasn't set a preference
-      if (!localStorage.getItem('theme')) {
-        const shouldBeDark = e.matches;
-        setIsDarkMode(shouldBeDark);
-        if (shouldBeDark) {
-          document.documentElement.classList.add('dark');
-        } else {
-          document.documentElement.classList.remove('dark');
-        }
-        // Dispatch event for other components
-        window.dispatchEvent(new Event('theme-change'));
-      }
-    };
-
-    mediaQuery.addEventListener('change', handleSystemThemeChange);
-    
-    // Also listen for DOM changes to keep state in sync
-    const observer = new MutationObserver(() => {
-      const isDark = document.documentElement.classList.contains('dark');
-      setIsDarkMode(isDark);
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class'],
-    });
-
-    return () => {
-      mediaQuery.removeEventListener('change', handleSystemThemeChange);
-      observer.disconnect();
-    };
+    document.documentElement.classList.add('dark');
   }, []);
-
-  const toggleDarkMode = () => {
-    // Get current theme state from DOM (most reliable)
-    const isCurrentlyDark = document.documentElement.classList.contains('dark');
-    const newDarkMode = !isCurrentlyDark;
-    
-    // Update state
-    setIsDarkMode(newDarkMode);
-    
-    // Update DOM immediately - this is the source of truth
-    // Update both html and body to ensure theme is applied everywhere
-    if (newDarkMode) {
-      document.documentElement.classList.add('dark');
-      document.body.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      document.body.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
-    }
-    
-    // Force a reflow to ensure DOM updates are applied
-    document.documentElement.offsetHeight;
-    
-    // Dispatch event for other components to react to theme change
-    window.dispatchEvent(new Event('theme-change'));
-    
-    // Force multiple dispatches to ensure all components catch it
-    setTimeout(() => {
-      window.dispatchEvent(new Event('theme-change'));
-    }, 10);
-    setTimeout(() => {
-      window.dispatchEvent(new Event('theme-change'));
-    }, 100);
-  };
 
   const handleHomeNavigation = () => {
     const adminToken = localStorage.getItem('adminToken');
@@ -191,10 +133,11 @@ export default function Navbar() {
 
   return (
     <>
-      <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-200 dark:bg-zinc-900/80 dark:border-zinc-800">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
+      <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-200 dark:bg-zinc-900/80 dark:border-zinc-800 font-sans" style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif" }}>
+        <div className="w-full px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16 w-full">
+            {/* Logo - Far Left */}
+            <div className="flex items-center flex-shrink-0">
               <button
                 onClick={() => {
                   if (isAuthenticated) {
@@ -208,102 +151,243 @@ export default function Navbar() {
                 StockPro
               </button>
             </div>
-            <div className="flex items-center gap-4">
-              {/* Dark Mode Toggle */}
-              <button
-                onClick={toggleDarkMode}
-                className="p-2 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors"
-                aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-              >
-                {isDarkMode ? (
-                  // Sun icon for light mode
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
-                    />
-                  </svg>
-                ) : (
-                  // Moon icon for dark mode
-                  <svg
-                    className="w-5 h-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-                    />
-                  </svg>
-                )}
-              </button>
 
+            {/* Desktop Menu - Far Right */}
+            <div className="hidden md:flex items-center gap-3 flex-shrink-0">
               {isAuthenticated ? (
                 <>
                   {user && (
-                    <span className="text-sm text-gray-600 dark:text-gray-400 px-2">
-                      {user.email}
-                      {user.is_superuser ? (
-                        <span className="ml-1 text-purple-600 dark:text-purple-400">(Superuser)</span>
-                      ) : user.is_admin ? (
-                        <span className="ml-1 text-blue-600 dark:text-blue-400">(Admin)</span>
-                      ) : (
-                        <span className="ml-1 text-gray-500 dark:text-gray-500">(User)</span>
+                    <div className="flex items-center gap-2 px-2">
+                      <Link
+                        href="/account"
+                        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                      >
+                        {user.avatar_url ? (
+                          <Image
+                            src={normalizeAvatarUrl(user.avatar_url) || ''}
+                            alt="Avatar"
+                            width={32}
+                            height={32}
+                            className="rounded-full object-cover border border-gray-300 dark:border-zinc-700 cursor-pointer"
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-gray-300 dark:bg-zinc-700 flex items-center justify-center cursor-pointer">
+                            <svg className="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                          </div>
+                        )}
+                      </Link>
+                      {(user.is_superuser || user.is_admin) && (
+                        <span className="flex items-center gap-1">
+                          <span 
+                            className={`w-2 h-2 rounded-full ${
+                              user.is_superuser 
+                                ? 'bg-purple-600 dark:bg-purple-400' 
+                                : 'bg-blue-600 dark:bg-blue-400'
+                            }`}
+                            title={user.is_superuser ? 'Superuser' : 'Admin'}
+                          ></span>
+                          <span className={`text-xs ${
+                            user.is_superuser 
+                              ? 'text-purple-600 dark:text-purple-400' 
+                              : 'text-blue-600 dark:text-blue-400'
+                          }`}>
+                            {user.is_superuser ? 'Superuser' : 'Admin'}
+                          </span>
+                        </span>
                       )}
-                    </span>
+                    </div>
                   )}
                   {(user?.is_admin || user?.is_superuser) && (
                     <button
                       onClick={() => router.push('/admin')}
-                      className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                      className="group relative px-5 py-2.5 text-sm font-semibold text-gray-700 dark:text-gray-200 rounded-xl overflow-hidden transition-all duration-300 whitespace-nowrap
+                        bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700
+                        hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600
+                        active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
                     >
-                      Admin
+                      <span className="relative z-10">Admin</span>
+                      <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                        translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
                     </button>
                   )}
                   <button
-                    onClick={handleHomeNavigation}
-                    className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
-                  >
-                    Home
-                  </button>
-                  <button
                     onClick={handleLogout}
-                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                    className="group relative px-5 py-2.5 text-sm font-semibold text-white rounded-xl overflow-hidden transition-all duration-300 whitespace-nowrap
+                      bg-red-600 dark:bg-red-700
+                      hover:bg-red-700 dark:hover:bg-red-600 hover:shadow-xl hover:shadow-red-500/30
+                      active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
                   >
-                    Logout
+                    <span className="relative z-10">Logout</span>
+                    <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                      translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
                   </button>
                 </>
               ) : (
                 <>
                   <button
                     onClick={() => setShowLogin(true)}
-                    className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                    className="group relative px-5 py-2.5 text-sm font-semibold text-gray-700 dark:text-gray-200 rounded-xl overflow-hidden transition-all duration-300 whitespace-nowrap
+                      bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700
+                      hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600
+                      active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
                   >
-                    Login
+                    <span className="relative z-10">Login</span>
+                    <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                      translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
                   </button>
                   <button
                     onClick={() => setShowRegister(true)}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                    className="group relative px-5 py-2.5 text-sm font-semibold text-white rounded-xl overflow-hidden transition-all duration-300 whitespace-nowrap
+                      bg-blue-600 dark:bg-blue-700
+                      hover:bg-blue-700 dark:hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30
+                      active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
                   >
-                    Register
+                    <span className="relative z-10">Register</span>
+                    <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                      translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
                   </button>
                 </>
               )}
             </div>
+
+            {/* Mobile Menu Button */}
+            <div className="md:hidden flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="group relative p-2 rounded-lg text-gray-700 dark:text-gray-300 overflow-hidden transition-all duration-300
+                  hover:bg-gray-100 dark:hover:bg-zinc-800 hover:scale-110
+                  active:scale-95"
+                aria-label="Toggle menu"
+              >
+                {isMobileMenuOpen ? (
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
+
+          {/* Mobile Menu Dropdown */}
+          {isMobileMenuOpen && (
+            <div className="md:hidden border-t border-gray-200 dark:border-zinc-800 py-4">
+              <div className="flex flex-col gap-3">
+                {isAuthenticated ? (
+                  <>
+                    {user && (
+                      <div className="px-4 py-2 flex items-center gap-2">
+                        <Link
+                          href="/account"
+                          className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                          onClick={() => setIsMobileMenuOpen(false)}
+                        >
+                          {user.avatar_url ? (
+                            <Image
+                              src={normalizeAvatarUrl(user.avatar_url) || ''}
+                              alt="Avatar"
+                              width={32}
+                              height={32}
+                              className="rounded-full object-cover border border-gray-300 dark:border-zinc-700 cursor-pointer"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-gray-300 dark:bg-zinc-700 flex items-center justify-center cursor-pointer">
+                              <svg className="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                            </div>
+                          )}
+                        </Link>
+                        {(user.is_superuser || user.is_admin) && (
+                          <span className="flex items-center gap-1">
+                            <span 
+                              className={`w-2 h-2 rounded-full ${
+                                user.is_superuser 
+                                  ? 'bg-purple-600 dark:bg-purple-400' 
+                                  : 'bg-blue-600 dark:bg-blue-400'
+                              }`}
+                              title={user.is_superuser ? 'Superuser' : 'Admin'}
+                            ></span>
+                            <span className={`text-xs ${
+                              user.is_superuser 
+                                ? 'text-purple-600 dark:text-purple-400' 
+                                : 'text-blue-600 dark:text-blue-400'
+                            }`}>
+                              {user.is_superuser ? 'Superuser' : 'Admin'}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {(user?.is_admin || user?.is_superuser) && (
+                      <button
+                        onClick={() => {
+                          router.push('/admin');
+                          setIsMobileMenuOpen(false);
+                        }}
+                        className="group relative px-5 py-2.5 text-sm font-semibold text-left text-gray-700 dark:text-gray-200 rounded-xl overflow-hidden transition-all duration-300
+                          bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700
+                          hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600
+                          active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+                      >
+                        <span className="relative z-10">Admin</span>
+                        <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                          translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        handleLogout();
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="group relative px-5 py-2.5 text-sm font-semibold text-left bg-red-600 dark:bg-red-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                        hover:bg-red-700 dark:hover:bg-red-600 hover:shadow-xl hover:shadow-red-500/30
+                        active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+                    >
+                      <span className="relative z-10">Logout</span>
+                      <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                        translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        setShowLogin(true);
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="group relative px-5 py-2.5 text-sm font-semibold text-left text-gray-700 dark:text-gray-200 rounded-xl overflow-hidden transition-all duration-300
+                        bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700
+                        hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600
+                        active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+                    >
+                      <span className="relative z-10">Login</span>
+                      <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                        translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowRegister(true);
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className="group relative px-5 py-2.5 text-sm font-semibold text-left bg-blue-600 dark:bg-blue-700 text-white rounded-xl overflow-hidden transition-all duration-300
+                        hover:bg-blue-700 dark:hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30
+                        active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+                    >
+                      <span className="relative z-10">Register</span>
+                      <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                        translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </nav>
 
@@ -312,6 +396,13 @@ export default function Navbar() {
           <LoginModal isOpen={showLogin} onClose={() => setShowLogin(false)} />
           <RegisterModal isOpen={showRegister} onClose={() => setShowRegister(false)} />
         </>
+      )}
+      
+      {/* Auto-open login modal if email parameter is in URL */}
+      {!isAuthenticated && typeof window !== 'undefined' && (
+        <EmailLoginHandler 
+          onOpenLogin={() => setShowLogin(true)} 
+        />
       )}
     </>
   );

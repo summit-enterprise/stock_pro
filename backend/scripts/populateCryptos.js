@@ -1,6 +1,6 @@
 /**
  * Populate Cryptocurrencies Script
- * Fetches top 8000 cryptocurrencies from CoinGecko and stores them in the database
+ * Fetches top 100 cryptocurrencies from CoinGecko and stores them in the database
  * Then fetches historical price data back to 2011
  */
 
@@ -14,8 +14,8 @@ async function populateCryptos() {
     console.log('🚀 Starting cryptocurrency population...\n');
     
     // Step 1: Fetch crypto list
-    console.log('Step 1: Fetching cryptocurrency list from CoinGecko...');
-    const cryptos = await cryptoService.fetchCryptoList(8000);
+    console.log('Step 1: Fetching top 100 cryptocurrencies from CoinGecko...');
+    const cryptos = await cryptoService.fetchCryptoList(100);
     console.log(`✅ Fetched ${cryptos.length} cryptocurrencies\n`);
     
     // Step 2: Store in asset_info table
@@ -28,11 +28,11 @@ async function populateCryptos() {
     
     if (FETCH_HISTORICAL) {
       console.log('Step 3: Fetching historical price data...');
-      console.log('⚠️  This will take a very long time for 8000 cryptos!');
+      console.log('⚠️  This will take some time for 100 cryptos!');
       console.log('⚠️  Consider running this separately with: node scripts/syncCryptoPrices.js\n');
       
-      // Only sync top 100 by default to avoid rate limits
-      const topCryptos = cryptos.slice(0, 100);
+      // Sync all 100 cryptos
+      const topCryptos = cryptos;
       let synced = 0;
       let totalInserted = 0;
       let totalUpdated = 0;

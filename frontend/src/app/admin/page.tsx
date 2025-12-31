@@ -2,6 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import BillingCharts from '@/components/BillingCharts';
+import ApiCallsDashboard from '@/components/ApiCallsDashboard';
+import ServiceHealthDashboard from '@/components/ServiceHealthDashboard';
+import SupportTicketsDashboard from '@/components/SupportTicketsDashboard';
+import ContactMessagesDashboard from '@/components/ContactMessagesDashboard';
 
 interface User {
   id: number;
@@ -20,9 +24,27 @@ export default function AdminPage() {
   const [user, setUser] = useState<any>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [admins, setAdmins] = useState<User[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'admins' | 'billing'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'admins' | 'billing' | 'api-calls' | 'services' | 'tickets' | 'contact'>('users');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [formData, setFormData] = useState({ email: '', name: '', password: '', is_admin: false, is_superuser: false });
+
+  // Check for email parameter in URL
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const emailParam = urlParams.get('email');
+      if (emailParam) {
+        setEmail(decodeURIComponent(emailParam));
+        // Clean up URL
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+      }
+    }
+  }, []);
 
   // Check for saved token (check both adminToken and regular token)
   useEffect(() => {
@@ -257,10 +279,10 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pt-20 p-4">
+    <div className="min-h-screen pt-20 p-4">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow mb-4 p-4">
+        <div className="bg-blue-50 dark:bg-gray-800 rounded-lg shadow mb-4 p-4">
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Admin Panel</h1>
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Logged in as {user?.email} {user?.is_superuser && '(Superuser)'}
@@ -268,7 +290,7 @@ export default function AdminPage() {
         </div>
 
         {/* Tabs */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow mb-4">
+        <div className="bg-blue-50 dark:bg-gray-800 rounded-lg shadow mb-4">
           <div className="border-b border-gray-200 dark:border-gray-700">
             <nav className="flex -mb-px">
               <button
@@ -301,6 +323,46 @@ export default function AdminPage() {
               >
                 GCP Billing & Usage
               </button>
+              <button
+                onClick={() => setActiveTab('api-calls')}
+                className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'api-calls'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                API Calls & Quota
+              </button>
+              <button
+                onClick={() => setActiveTab('services')}
+                className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'services'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                Service Health
+              </button>
+              <button
+                onClick={() => setActiveTab('tickets')}
+                className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'tickets'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                Support Tickets
+              </button>
+              <button
+                onClick={() => setActiveTab('contact')}
+                className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'contact'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                Contact Messages
+              </button>
             </nav>
           </div>
         </div>
@@ -308,12 +370,34 @@ export default function AdminPage() {
         {/* Content based on active tab */}
         {activeTab === 'billing' ? (
           <BillingCharts token={token || ''} />
+        ) : activeTab === 'api-calls' ? (
+          <ApiCallsDashboard token={token || ''} />
+        ) : activeTab === 'services' ? (
+          <ServiceHealthDashboard token={token || ''} />
+        ) : activeTab === 'tickets' ? (
+          <SupportTicketsDashboard />
+        ) : activeTab === 'contact' ? (
+          <ContactMessagesDashboard />
         ) : (
           /* Users/Admins Table */
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+          <div className="bg-blue-50 dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                {activeTab === 'users' ? 'Users' : 'Admins'}
+              </h3>
+              <button
+                onClick={() => {
+                  setFormData({ email: '', name: '', password: '', is_admin: activeTab === 'admins', is_superuser: false });
+                  setShowCreateModal(true);
+                }}
+                className="px-5 py-2.5 bg-blue-600 dark:bg-blue-700 hover:bg-blue-700 dark:hover:bg-blue-600 text-white rounded-xl text-sm font-semibold hover:shadow-xl hover:shadow-blue-500/30 transition-all duration-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+              >
+                + Create {activeTab === 'users' ? 'User' : 'Admin'}
+              </button>
+            </div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead className="bg-gray-50 dark:bg-gray-700">
+                <thead className="bg-blue-100 dark:bg-gray-700">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                       ID
@@ -331,13 +415,16 @@ export default function AdminPage() {
                       Created
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Role
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                       Actions
                     </th>
                   </tr>
                 </thead>
-                <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                <tbody className="bg-blue-50 dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {(activeTab === 'users' ? users : admins).map((u) => (
-                    <tr key={u.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <tr key={u.id} className="hover:bg-blue-100 dark:hover:bg-gray-700">
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                         {u.id}
                       </td>
@@ -355,7 +442,30 @@ export default function AdminPage() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                         {new Date(u.created_at).toLocaleDateString()}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {u.is_superuser && (
+                          <span className="px-2 py-1 text-xs rounded-full bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 mr-1">
+                            Superuser
+                          </span>
+                        )}
+                        {u.is_admin && !u.is_superuser && (
+                          <span className="px-2 py-1 text-xs rounded-full bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
+                            Admin
+                          </span>
+                        )}
+                        {!u.is_admin && !u.is_superuser && (
+                          <span className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
+                            User
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                        <button
+                          onClick={() => openEditModal(u)}
+                          className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300"
+                        >
+                          Edit
+                        </button>
                         <button
                           onClick={() => handleDeleteUser(u.id)}
                           className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
@@ -372,6 +482,108 @@ export default function AdminPage() {
                   No {activeTab} found
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Create/Edit Modal */}
+        {(showCreateModal || showEditModal) && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-blue-50 dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
+              <h2 className="text-xl font-bold mb-4 text-gray-900 dark:text-white">
+                {showEditModal ? 'Edit User' : `Create ${activeTab === 'users' ? 'User' : 'Admin'}`}
+              </h2>
+              {error && (
+                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-red-700 dark:text-red-300 text-sm">
+                  {error}
+                </div>
+              )}
+              <form onSubmit={showEditModal ? handleEditUser : handleCreateUser} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Email *
+                  </label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Name
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Password {showEditModal ? '(leave blank to keep current)' : '(optional, will generate if blank)'}
+                  </label>
+                  <input
+                    type="password"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+                {showEditModal && user?.is_superuser && (
+                  <>
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="is_admin"
+                        checked={formData.is_admin}
+                        onChange={(e) => setFormData({ ...formData, is_admin: e.target.checked })}
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="is_admin" className="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                        Admin
+                      </label>
+                    </div>
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="is_superuser"
+                        checked={formData.is_superuser}
+                        onChange={(e) => setFormData({ ...formData, is_superuser: e.target.checked })}
+                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                      />
+                      <label htmlFor="is_superuser" className="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                        Superuser
+                      </label>
+                    </div>
+                  </>
+                )}
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateModal(false);
+                      setShowEditModal(false);
+                      setEditingUser(null);
+                      setFormData({ email: '', name: '', password: '', is_admin: false, is_superuser: false });
+                      setError(null);
+                    }}
+                    className="px-5 py-2.5 text-sm font-semibold border border-gray-200 dark:border-zinc-700 rounded-xl text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 hover:shadow-md hover:border-gray-300 dark:hover:border-zinc-600 transition-all duration-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="px-5 py-2.5 text-sm font-semibold bg-blue-600 dark:bg-blue-700 hover:bg-blue-700 dark:hover:bg-blue-600 disabled:bg-gray-400 dark:disabled:bg-zinc-700 text-white rounded-xl hover:shadow-xl hover:shadow-blue-500/30 transition-all duration-300 active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
+                  >
+                    {loading ? 'Saving...' : showEditModal ? 'Update' : 'Create'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

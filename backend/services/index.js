@@ -44,6 +44,16 @@ const newsService = loadService('general/newsService');
 const assetNewsService = loadService('general/assetNewsService');
 const logoService = loadService('general/logoService');
 const youtubeService = loadService('general/youtubeService');
+const trendingAssetsService = loadService('general/trendingAssetsService');
+const secFilingsService = loadService('general/secFilingsService');
+const imageService = loadService('general/imageService');
+// RSS News Service (may not exist in all environments)
+let rssNewsService = null;
+try {
+  rssNewsService = loadService('general/rssNewsService');
+} catch (error) {
+  // RSS service is optional
+}
 
 // ============================================================================
 // Stock-Specific Services
@@ -58,6 +68,7 @@ const analystRatingsService = loadService('stocks/analystRatingsService');
 // ============================================================================
 const cryptoService = loadService('crypto/cryptoService');
 const cryptoPriceService = loadService('crypto/cryptoPriceService');
+const cryptoMarketService = loadService('crypto/cryptoMarketService');
 
 // ============================================================================
 // Utility Services
@@ -76,6 +87,10 @@ module.exports = {
   assetNewsService,
   logoService,
   youtubeService,
+  trendingAssetsService,
+  secFilingsService,
+  rssNewsService,
+  imageService,
   
   // Stocks
   dividendService,
@@ -86,6 +101,7 @@ module.exports = {
   // Crypto
   cryptoService,
   cryptoPriceService,
+  cryptoMarketService,
   
   // Utils
   assetGenerator,

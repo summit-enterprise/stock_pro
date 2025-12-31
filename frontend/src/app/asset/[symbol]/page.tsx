@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
+import ProtectedRoute from '@/components/ProtectedRoute';
 import PriceChart from '@/components/PriceChart';
 import AssetNews from '@/components/AssetNews';
 import AssetIcon from '@/components/AssetIcon';
@@ -56,6 +57,8 @@ export default function AssetDetailPage() {
     longTerm?: { signal: string; strength: number };
   } | null>(null);
   const [ratingsLoading, setRatingsLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [modalMessage, setModalMessage] = useState('');
 
   // Fetch all 5 years of data on initial load
   useEffect(() => {
@@ -158,6 +161,7 @@ export default function AssetDetailPage() {
       const token = localStorage.getItem('token');
       if (!token) {
         alert('Please log in to add assets to your watchlist');
+        setWatchlistLoading(false);
         return;
       }
 
@@ -171,7 +175,16 @@ export default function AssetDetailPage() {
         });
 
         if (response.ok) {
+          // Update state immediately
           setInWatchlist(false);
+          setModalMessage(`${symbol} removed from watchlist`);
+          setShowModal(true);
+          setTimeout(() => setShowModal(false), 2000);
+          // Dispatch event to update other components
+          window.dispatchEvent(new Event('watchlist-changed'));
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Failed to remove from watchlist');
         }
       } else {
         // Add to watchlist
@@ -185,30 +198,64 @@ export default function AssetDetailPage() {
         });
 
         if (response.ok) {
+          // Update state immediately
           setInWatchlist(true);
+          setModalMessage(`${symbol} added to watchlist`);
+          setShowModal(true);
+          setTimeout(() => setShowModal(false), 2000);
+          // Dispatch event to update other components
+          window.dispatchEvent(new Event('watchlist-changed'));
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          alert(errorData.message || 'Failed to add to watchlist');
         }
       }
     } catch (error) {
       console.error('Error toggling watchlist:', error);
+      alert('An error occurred. Please try again.');
     } finally {
       setWatchlistLoading(false);
     }
   };
 
   const handlePortfolioClick = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      alert('Please log in to add assets to your portfolio');
-      return;
-    }
+    setPortfolioLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setModalMessage('Please log in to add assets to your portfolio');
+        setShowModal(true);
+        setTimeout(() => setShowModal(false), 3000);
+        setPortfolioLoading(false);
+        return;
+      }
 
-    if (inPortfolio) {
-      // If already in portfolio, navigate to portfolio page
-      window.location.href = '/portfolio';
-    } else {
-      // If not in portfolio, add it with default values (0 shares, 0 avg price)
-      setPortfolioLoading(true);
-      try {
+      if (inPortfolio) {
+        // Remove from portfolio
+        const response = await fetch(`http://localhost:3001/api/portfolio/${symbol}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          // Update state immediately
+          setInPortfolio(false);
+          setPortfolioData(null);
+          setModalMessage(`${symbol} removed from portfolio`);
+          setShowModal(true);
+          setTimeout(() => setShowModal(false), 2000);
+          // Dispatch event to update other components
+          window.dispatchEvent(new Event('portfolio-changed'));
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          setModalMessage(errorData.message || errorData.error || 'Failed to remove from portfolio');
+          setShowModal(true);
+          setTimeout(() => setShowModal(false), 3000);
+        }
+      } else {
+        // Add to portfolio with default values (0 shares, 0 avg price)
         const response = await fetch('http://localhost:3001/api/portfolio', {
           method: 'POST',
           headers: {
@@ -223,17 +270,28 @@ export default function AssetDetailPage() {
         });
 
         if (response.ok) {
+          // Update state immediately
           setInPortfolio(true);
           setPortfolioData({ sharesOwned: 0, avgSharePrice: 0 });
-          // Navigate to portfolio page to edit
-          window.location.href = '/portfolio';
+          setModalMessage(`${symbol} added to portfolio`);
+          setShowModal(true);
+          setTimeout(() => setShowModal(false), 2000);
+          // Dispatch event to update other components
+          window.dispatchEvent(new Event('portfolio-changed'));
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          setModalMessage(errorData.message || errorData.error || 'Failed to add to portfolio');
+          setShowModal(true);
+          setTimeout(() => setShowModal(false), 3000);
         }
-      } catch (error) {
-        console.error('Error adding to portfolio:', error);
-        alert('Failed to add to portfolio. Please try again.');
-      } finally {
-        setPortfolioLoading(false);
       }
+    } catch (error) {
+      console.error('Error toggling portfolio:', error);
+      setModalMessage('An error occurred. Please try again.');
+      setShowModal(true);
+      setTimeout(() => setShowModal(false), 3000);
+    } finally {
+      setPortfolioLoading(false);
     }
   };
 
@@ -242,13 +300,27 @@ export default function AssetDetailPage() {
     setError('');
     
     try {
+      const token = localStorage.getItem('token');
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       // Always fetch 5Y range to get all available data
+      const encodedSymbol = encodeURIComponent(symbol);
       const response = await fetch(
-        `http://localhost:3001/api/assets/${symbol}?range=5Y`
+        `http://localhost:3001/api/assets/${encodedSymbol}?range=5Y`,
+        { headers }
       );
       
       if (!response.ok) {
-        throw new Error('Failed to fetch asset data');
+        if (response.status === 401) {
+          throw new Error('Authentication required. Please log in.');
+        }
+        throw new Error(`Failed to fetch asset data: ${response.status}`);
       }
       
       const data = await response.json();
@@ -360,12 +432,22 @@ export default function AssetDetailPage() {
   ];
 
   // Filter tabs based on asset category
-  // For crypto assets, remove Filings, Earnings, Analysts, and Dividends
-  const navTabs = assetData?.category?.toLowerCase() === 'crypto'
-    ? allNavTabs.filter(tab => 
-        !['Filings', 'Earnings', 'Analysts', 'Dividends'].includes(tab.id)
-      )
-    : allNavTabs;
+  // Filings, Earnings, Financials, and Dividends are only available for: Equity, ETF, Bond, MutualFund, InternationalStock
+  // Remove these tabs for: Crypto, Commodity, Index
+  const normalizeCategory = (cat: string | undefined): string => {
+    if (!cat) return 'Unknown';
+    return cat.toLowerCase().trim();
+  };
+  
+  const category = normalizeCategory(assetData?.category);
+  const categoriesWithoutFinancialData = ['crypto', 'cryptocurrency', 'cryptocurrencies', 'commodity', 'commodities', 'index', 'indices'];
+  const shouldShowFinancialData = !categoriesWithoutFinancialData.includes(category);
+  
+  const navTabs = shouldShowFinancialData
+    ? allNavTabs
+    : allNavTabs.filter(tab => 
+        !['Filings', 'Earnings', 'Financials', 'Dividends'].includes(tab.id)
+      );
 
   if (loading) {
     return (
@@ -397,7 +479,8 @@ export default function AssetDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-black pt-16">
+    <ProtectedRoute>
+      <div className="min-h-screen bg-white dark:bg-black pt-16">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Back Button */}
         <Link 
@@ -484,50 +567,64 @@ export default function AssetDetailPage() {
               </p>
             </div>
             {/* Watchlist and Portfolio Icons */}
-            <div className="flex items-center gap-2">
-              {/* Watchlist Icon */}
-              <button
-                onClick={handleWatchlistToggle}
-                disabled={watchlistLoading}
-                className={`p-3 rounded-full transition-all ${
-                  inWatchlist
-                    ? 'bg-blue-600 text-white hover:bg-blue-700'
-                    : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-zinc-700'
-                } ${watchlistLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                title={inWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
-              >
-                {inWatchlist ? (
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                  </svg>
-                ) : (
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                  </svg>
-                )}
-              </button>
-              {/* Portfolio Icon */}
-              <button
-                onClick={handlePortfolioClick}
-                disabled={portfolioLoading}
-                className={`p-3 rounded-full transition-all ${
-                  inPortfolio
-                    ? 'bg-green-600 text-white hover:bg-green-700'
-                    : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-zinc-700'
-                } ${portfolioLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                title={inPortfolio ? 'View in portfolio' : 'Add to portfolio'}
-              >
-                {inPortfolio ? (
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
-                    <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
-                  </svg>
-                ) : (
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                  </svg>
-                )}
-              </button>
+            <div className="flex flex-col items-center gap-2">
+              <div className="flex items-center gap-2">
+                {/* Watchlist Icon */}
+                <div className="flex flex-col items-center gap-1">
+                  <button
+                    onClick={handleWatchlistToggle}
+                    disabled={watchlistLoading}
+                    className={`p-3 rounded-full transition-all ${
+                      inWatchlist
+                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                        : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-zinc-700'
+                    } ${watchlistLoading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                    title={inWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
+                  >
+                    {inWatchlist ? (
+                      <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                      </svg>
+                    )}
+                  </button>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">
+                    {inWatchlist ? 'In watchlist' : 'Add to watchlist'}
+                  </span>
+                </div>
+                {/* Portfolio Icon */}
+                <div className="flex flex-col items-center gap-1">
+                  <button
+                    onClick={handlePortfolioClick}
+                    disabled={portfolioLoading || assetData.category?.toLowerCase() === 'index'}
+                    className={`p-3 rounded-full transition-all ${
+                      inPortfolio
+                        ? 'bg-green-600 text-white hover:bg-green-700'
+                        : assetData.category?.toLowerCase() === 'index'
+                        ? 'bg-gray-100 dark:bg-zinc-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+                        : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-zinc-700'
+                    } ${portfolioLoading || assetData.category?.toLowerCase() === 'index' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                    title={assetData.category?.toLowerCase() === 'index' ? 'Indices cannot be added to portfolio' : (inPortfolio ? 'View in portfolio' : 'Add to portfolio')}
+                  >
+                    {inPortfolio ? (
+                      <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
+                        <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
+                      </svg>
+                    ) : (
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                      </svg>
+                    )}
+                  </button>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">
+                    {inPortfolio ? 'In portfolio' : 'Add to portfolio'}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -551,7 +648,7 @@ export default function AssetDetailPage() {
         </div>
 
         {/* Current Price Section */}
-        <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6 mb-8">
+        <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6 mb-8">
           <div className="flex items-baseline gap-4 mb-2">
             <span className="text-4xl font-bold text-gray-900 dark:text-white">
               {formatPrice(assetData.currentPrice)}
@@ -602,25 +699,25 @@ export default function AssetDetailPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           {assetData.historicalData.length > 0 && (
             <>
-              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+              <div className="bg-gray-100 dark:bg-zinc-900 rounded-lg p-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Open</p>
                 <p className="text-lg font-semibold text-gray-900 dark:text-white">
                   {formatPrice(assetData.historicalData[assetData.historicalData.length - 1].open)}
                 </p>
               </div>
-              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+              <div className="bg-gray-100 dark:bg-zinc-900 rounded-lg p-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">High</p>
                 <p className="text-lg font-semibold text-gray-900 dark:text-white">
                   {formatPrice(assetData.historicalData[assetData.historicalData.length - 1].high)}
                 </p>
               </div>
-              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+              <div className="bg-gray-100 dark:bg-zinc-900 rounded-lg p-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Low</p>
                 <p className="text-lg font-semibold text-gray-900 dark:text-white">
                   {formatPrice(assetData.historicalData[assetData.historicalData.length - 1].low)}
                 </p>
               </div>
-              <div className="bg-gray-50 dark:bg-zinc-900 rounded-lg p-4">
+              <div className="bg-gray-100 dark:bg-zinc-900 rounded-lg p-4">
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Volume</p>
                 <p className="text-lg font-semibold text-gray-900 dark:text-white">
                   {assetData.historicalData[assetData.historicalData.length - 1].volume.toLocaleString()}
@@ -632,7 +729,7 @@ export default function AssetDetailPage() {
 
         {/* Historical Data Table */}
         {assetData.historicalData.length > 0 && (
-          <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+          <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
             <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
               Historical Data
             </h2>
@@ -682,7 +779,43 @@ export default function AssetDetailPage() {
           <AssetNews symbol={assetData.symbol} />
         </div>
       </div>
-    </div>
+      </div>
+
+      {/* Confirmation Modal */}
+      {showModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+          onClick={() => setShowModal(false)}
+        >
+          <div 
+            className="bg-gray-50 dark:bg-zinc-800 rounded-lg shadow-xl p-6 max-w-sm w-full mx-4 animate-fade-in relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close Button */}
+            <button
+              onClick={() => setShowModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              aria-label="Close"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            
+            <div className="flex items-center justify-center mb-4">
+              <div className="w-12 h-12 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
+                <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+            </div>
+            <p className="text-center text-gray-900 dark:text-white text-lg font-medium">
+              {modalMessage}
+            </p>
+          </div>
+        </div>
+      )}
+    </ProtectedRoute>
   );
 }
 

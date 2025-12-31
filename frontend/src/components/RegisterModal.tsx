@@ -46,6 +46,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
             googleId: googleUser.sub,
             email: googleUser.email,
             name: googleUser.name,
+            picture: googleUser.picture || null, // Google profile picture
           }),
         });
 
@@ -206,9 +207,16 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition-colors font-medium"
+            className="group relative w-full py-3 bg-blue-600 dark:bg-blue-700 text-white rounded-xl overflow-hidden transition-all duration-300 font-semibold
+              hover:bg-blue-700 dark:hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30
+              disabled:bg-gray-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed disabled:hover:shadow-none
+              active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
           >
-            {loading ? 'Registering...' : 'Register'}
+            <span className="relative z-10">{loading ? 'Registering...' : 'Register'}</span>
+            {!loading && (
+              <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+            )}
           </button>
         </form>
 
@@ -224,8 +232,13 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
 
           <button
             onClick={handleGoogleRegister}
-            className="mt-4 w-full py-3 border border-gray-300 dark:border-zinc-700 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors flex items-center justify-center gap-3"
+            className="group relative mt-4 w-full py-3 border border-gray-300 dark:border-zinc-700 rounded-lg overflow-hidden transition-all duration-300
+              hover:bg-gray-50 dark:hover:bg-zinc-800 hover:shadow-md
+              active:scale-95 active:shadow-inner
+              flex items-center justify-center gap-3"
           >
+            <span className="absolute inset-0 bg-gradient-to-r from-gray-200/0 via-gray-200/10 to-gray-200/0 
+              translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
             <svg className="w-5 h-5" viewBox="0 0 24 24">
               <path
                 fill="#4285F4"

@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { pool } = require('../db');
 const crypto = require('crypto');
+const { sendWelcomeEmail } = require('../services/general/emailService');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
@@ -334,18 +335,24 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// Create regular user (superuser only)
-router.post('/create-user', requireSuperuser, async (req, res) => {
+// Create regular user (admin can create users, superuser can create admins)
+router.post('/create-user', requireAdmin, async (req, res) => {
   try {
     const { email, name, password } = req.body;
+    const isSuperuser = req.user.is_superuser;
 
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
 
     // Check if user already exists
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    const existing = await pool.query('SELECT id, is_admin FROM users WHERE email = $1', [email]);
     if (existing.rows.length > 0) {
+      const existingUser = existing.rows[0];
+      // If existing user is an admin and current user is not superuser, deny
+      if (existingUser.is_admin && !isSuperuser) {
+        return res.status(403).json({ error: 'Only superusers can modify admin accounts' });
+      }
       return res.status(409).json({ error: 'User with this email already exists' });
     }
 
@@ -366,10 +373,19 @@ router.post('/create-user', requireSuperuser, async (req, res) => {
       [email, passwordHash, 'custom', name || null, false, false]
     );
 
+    // Send welcome email with credentials
+    try {
+      await sendWelcomeEmail(email, name || null, finalPassword, false);
+    } catch (emailError) {
+      console.error('Error sending welcome email (non-fatal):', emailError);
+      // Continue even if email fails
+    }
+
     res.status(201).json({
       message: 'User created successfully',
       user: result.rows[0],
       password: finalPassword,
+      emailSent: true,
       warning: password ? undefined : 'Please share this password securely with the new user'
     });
   } catch (error) {
@@ -422,10 +438,19 @@ router.post('/create-superuser', requireSuperuser, async (req, res) => {
       [email, passwordHash, 'custom', name || null, true, true]
     );
 
+    // Send welcome email with credentials
+    try {
+      await sendWelcomeEmail(email, name || null, finalPassword, true);
+    } catch (emailError) {
+      console.error('Error sending welcome email (non-fatal):', emailError);
+      // Continue even if email fails
+    }
+
     res.status(201).json({
       message: 'Superuser created successfully',
       user: result.rows[0],
       password: finalPassword,
+      emailSent: true,
       warning: password ? undefined : 'Please share this password securely with the new superuser'
     });
   } catch (error) {
@@ -435,9 +460,15 @@ router.post('/create-superuser', requireSuperuser, async (req, res) => {
 });
 
 // Create new admin (superuser only)
-router.post('/create-admin', requireSuperuser, async (req, res) => {
+router.post('/create-admin', requireAdmin, async (req, res) => {
   try {
-    const { email, name } = req.body;
+    const { email, name, password } = req.body;
+    const isSuperuser = req.user.is_superuser;
+
+    // Only superusers can create admins
+    if (!isSuperuser) {
+      return res.status(403).json({ error: 'Only superusers can create admin accounts' });
+    }
 
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
@@ -465,10 +496,13 @@ router.post('/create-admin', requireSuperuser, async (req, res) => {
       });
     }
 
-    // Generate secure random password
-    const password = crypto.randomBytes(16).toString('base64').slice(0, 16) + 'A1!';
+    // Generate secure random password if not provided
+    let finalPassword = password;
+    if (!finalPassword) {
+      finalPassword = crypto.randomBytes(16).toString('base64').slice(0, 16) + 'A1!';
+    }
     const saltRounds = 10;
-    const passwordHash = await bcrypt.hash(password, saltRounds);
+    const passwordHash = await bcrypt.hash(finalPassword, saltRounds);
 
     // Create new admin user
     const result = await pool.query(
@@ -478,6 +512,14 @@ router.post('/create-admin', requireSuperuser, async (req, res) => {
       [email, passwordHash, 'custom', name || null, true, false]
     );
 
+    // Send welcome email with credentials
+    try {
+      await sendWelcomeEmail(email, name || null, finalPassword, true);
+    } catch (emailError) {
+      console.error('Error sending welcome email (non-fatal):', emailError);
+      // Continue even if email fails
+    }
+
     res.status(201).json({
       message: 'Admin created successfully',
       admin: {
@@ -485,8 +527,9 @@ router.post('/create-admin', requireSuperuser, async (req, res) => {
         email: result.rows[0].email,
         name: result.rows[0].name
       },
-      password: password, // Return password so superuser can share it
-      warning: 'Please share this password securely with the new admin'
+      password: finalPassword, // Return password so superuser can share it
+      emailSent: true,
+      warning: password ? undefined : 'Please share this password securely with the new admin'
     });
   } catch (error) {
     console.error('Error creating admin:', error);

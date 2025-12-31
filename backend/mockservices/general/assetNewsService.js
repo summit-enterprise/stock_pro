@@ -26,6 +26,14 @@ async function fetchAndCacheAssetNews(symbol) {
   return await fetchAssetNews(symbol);
 }
 
+// Get news for an asset (checks cache first, fetches if needed)
+// Mock version - just returns mock data
+async function getAssetNews(symbol) {
+  const normalizedSymbol = symbol.toUpperCase();
+  console.log(`[MOCK] Fetching asset news for ${normalizedSymbol}`);
+  return generateMockAssetNews(normalizedSymbol);
+}
+
 async function refreshAllAssetNews() {
   console.log('[MOCK] Would refresh all asset news');
 }
@@ -33,6 +41,7 @@ async function refreshAllAssetNews() {
 module.exports = {
   fetchAssetNews,
   fetchAndCacheAssetNews,
+  getAssetNews,
   refreshAllAssetNews,
   generateMockAssetNews
 };

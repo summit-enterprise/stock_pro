@@ -8,25 +8,11 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
-const jwt = require('jsonwebtoken');
+const { verifyToken } = require('../middleware/auth');
 const { storageService } = require('../services');
 
-// Middleware to verify user token
-const verifyToken = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.userId = decoded.userId;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-};
+// Protect all storage routes
+router.use(verifyToken);
 
 // Configure multer for file uploads
 const upload = multer({

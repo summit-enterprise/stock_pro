@@ -14,13 +14,13 @@ export default function Home() {
       </section>
 
       {/* Features Section */}
-      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gray-50 dark:bg-zinc-900">
+      <section className="py-20 px-4 sm:px-6 lg:px-8 bg-gray-100 dark:bg-zinc-900">
         <div className="max-w-7xl mx-auto">
           <h2 className="text-3xl font-bold text-center text-gray-900 dark:text-white mb-12">
             Features
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg shadow-sm">
+            <div className="bg-gray-50 dark:bg-zinc-800 p-6 rounded-lg shadow-sm">
               <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
                 Real-Time Data
               </h3>
@@ -28,7 +28,7 @@ export default function Home() {
                 Get up-to-date stock information and market data.
               </p>
             </div>
-            <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg shadow-sm">
+            <div className="bg-gray-50 dark:bg-zinc-800 p-6 rounded-lg shadow-sm">
               <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
                 Advanced Analytics
               </h3>
@@ -36,7 +36,7 @@ export default function Home() {
                 Analyze trends and patterns with powerful tools.
               </p>
             </div>
-            <div className="bg-white dark:bg-zinc-800 p-6 rounded-lg shadow-sm">
+            <div className="bg-gray-50 dark:bg-zinc-800 p-6 rounded-lg shadow-sm">
               <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
                 Portfolio Tracking
               </h3>
@@ -72,13 +72,6 @@ export default function Home() {
           </p>
         </div>
       </section>
-
-      {/* Footer */}
-      <footer className="py-8 px-4 sm:px-6 lg:px-8 bg-gray-900 text-gray-400">
-        <div className="max-w-7xl mx-auto text-center">
-          <p>&copy; 2024 StockPro. All rights reserved.</p>
-        </div>
-      </footer>
     </div>
   );
 }

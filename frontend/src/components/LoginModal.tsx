@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useGoogleLogin } from '@react-oauth/google';
 
@@ -14,6 +14,22 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
+  const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
+  const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
+
+  // Check for email parameter in URL
+  useEffect(() => {
+    if (isOpen && typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const emailParam = urlParams.get('email');
+      if (emailParam) {
+        setEmail(decodeURIComponent(emailParam));
+        setForgotPasswordEmail(decodeURIComponent(emailParam));
+      }
+    }
+  }, [isOpen]);
   const [error, setError] = useState('');
 
   const handleGoogleLogin = useGoogleLogin({
@@ -45,6 +61,7 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
             googleId: googleUser.sub,
             email: googleUser.email,
             name: googleUser.name,
+            picture: googleUser.picture || null, // Google profile picture
           }),
         });
 
@@ -135,6 +152,34 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotPasswordLoading(true);
+    setError('');
+
+    try {
+      const response = await fetch('http://localhost:3001/api/auth/forgot-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: forgotPasswordEmail }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send password reset email');
+      }
+
+      setForgotPasswordSuccess(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send password reset email');
+    } finally {
+      setForgotPasswordLoading(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -174,9 +219,21 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Password
-            </label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Password
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForgotPassword(true);
+                  setForgotPasswordEmail(email);
+                }}
+                className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                Forgot password?
+              </button>
+            </div>
             <input
               type="password"
               value={password}
@@ -190,9 +247,16 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition-colors font-medium"
+            className="group relative w-full py-3 bg-blue-600 dark:bg-blue-700 text-white rounded-xl overflow-hidden transition-all duration-300 font-semibold
+              hover:bg-blue-700 dark:hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30
+              disabled:bg-gray-400 dark:disabled:bg-zinc-700 disabled:cursor-not-allowed disabled:hover:shadow-none
+              active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 tracking-tight"
           >
-            {loading ? 'Logging in...' : 'Login'}
+            <span className="relative z-10">{loading ? 'Logging in...' : 'Login'}</span>
+            {!loading && (
+              <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent 
+                translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
+            )}
           </button>
         </form>
 
@@ -208,8 +272,13 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
 
           <button
             onClick={handleGoogleLogin}
-            className="mt-4 w-full py-3 border border-gray-300 dark:border-zinc-700 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors flex items-center justify-center gap-3"
+            className="group relative mt-4 w-full py-3 border border-gray-300 dark:border-zinc-700 rounded-lg overflow-hidden transition-all duration-300
+              hover:bg-gray-50 dark:hover:bg-zinc-800 hover:shadow-md
+              active:scale-95 active:shadow-inner
+              flex items-center justify-center gap-3"
           >
+            <span className="absolute inset-0 bg-gradient-to-r from-gray-200/0 via-gray-200/10 to-gray-200/0 
+              translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700"></span>
             <svg className="w-5 h-5" viewBox="0 0 24 24">
               <path
                 fill="#4285F4"
@@ -231,6 +300,66 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
             <span className="text-gray-700 dark:text-gray-300 font-medium">Continue with Google</span>
           </button>
         </div>
+
+        {/* Forgot Password Modal */}
+        {showForgotPassword && (
+          <div className="mt-6 p-4 bg-gray-50 dark:bg-zinc-800 rounded-lg border border-gray-200 dark:border-zinc-700">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Reset Password</h3>
+              <button
+                onClick={() => {
+                  setShowForgotPassword(false);
+                  setForgotPasswordSuccess(false);
+                  setError('');
+                }}
+                className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {forgotPasswordSuccess ? (
+              <div className="text-center py-4">
+                <div className="mb-4 text-green-600 dark:text-green-400">
+                  <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <p className="text-gray-700 dark:text-gray-300 mb-2">
+                  Password reset email sent!
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Check your email for a temporary password. Please change it after logging in.
+                </p>
+              </div>
+            ) : (
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={forgotPasswordEmail}
+                    onChange={(e) => setForgotPasswordEmail(e.target.value)}
+                    required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-zinc-700 dark:border-zinc-600 dark:text-white"
+                    placeholder="your@email.com"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={forgotPasswordLoading}
+                  className="w-full py-2 bg-blue-600 dark:bg-blue-700 text-white rounded-lg font-medium transition-colors hover:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {forgotPasswordLoading ? 'Sending...' : 'Send Reset Email'}
+                </button>
+              </form>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

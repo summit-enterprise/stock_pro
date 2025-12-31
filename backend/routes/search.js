@@ -1,7 +1,13 @@
 const express = require('express');
 const axios = require('axios');
+const { verifyToken } = require('../middleware/auth');
+const { pool } = require('../db');
 const mockData = require('../services/utils/mockData');
+const { trendingAssetsService } = require('../services');
 const router = express.Router();
+
+// Protect all search routes
+router.use(verifyToken);
 
 // Check if we should use mock data
 const USE_MOCK_DATA = process.env.NODE_ENV !== 'production' && process.env.USE_MOCK_DATA !== 'false';
@@ -16,7 +22,52 @@ router.get('/autocomplete', async (req, res) => {
     }
 
     if (USE_MOCK_DATA) {
-      // Use mock search results
+      // First, try to search the database for real assets
+      try {
+        const searchQuery = `%${query}%`;
+        const dbResult = await pool.query(
+          `SELECT symbol, name, type, category, exchange, currency 
+           FROM asset_info 
+           WHERE (LOWER(symbol) LIKE LOWER($1) OR LOWER(name) LIKE LOWER($1))
+           ORDER BY 
+             CASE WHEN LOWER(symbol) = LOWER($2) THEN 1
+                  WHEN LOWER(symbol) LIKE LOWER($2 || '%') THEN 2
+                  WHEN LOWER(name) LIKE LOWER($2 || '%') THEN 3
+                  ELSE 4 END,
+             symbol
+           LIMIT 10`,
+          [searchQuery, query]
+        );
+
+        if (dbResult.rows.length > 0) {
+          const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+          const results = dbResult.rows.map(row => {
+            const category = normalizeCategory(row.category || determineCategory(row.symbol, row.type, row.exchange) || 'Unknown');
+            const result = {
+              symbol: row.symbol,
+              name: row.name || row.symbol,
+              category: category, // Include category in response
+              market: row.type === 'crypto' ? 'crypto' : row.type === 'index' ? 'indices' : 'stocks',
+              type: row.type === 'crypto' ? 'crypto' : row.type === 'index' ? 'index' : row.type === 'commodity' ? 'commodity' : 'CS',
+              exchange: row.exchange || '',
+              currency: row.currency || 'USD'
+            };
+            
+            // Track search for trending assets (async, don't wait)
+            trendingAssetsService.trackAssetSearch(row.symbol).catch(err => {
+              console.error('Error tracking asset search:', err);
+            });
+            
+            return result;
+          });
+          return res.json({ results });
+        }
+      } catch (dbError) {
+        console.error('Database search error:', dbError.message);
+        // Fall through to mock data
+      }
+
+      // Fallback to mock search results if database search fails or returns no results
       const mockResults = mockData.getMockSearchResults(query);
       const results = mockResults.map(ticker => ({
         symbol: ticker.symbol,

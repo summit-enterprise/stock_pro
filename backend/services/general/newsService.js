@@ -24,14 +24,24 @@ const initRedis = async () => {
 // Cache TTL: 2.5 hours (9000 seconds)
 const NEWS_CACHE_TTL = 9000;
 
-// Helper function to fetch news from NewsAPI
+// Helper function to fetch news from multiple sources (RSS first, then free mock data)
 async function fetchNewsFromAPI(category, country = null, query = null) {
-  const apiKey = process.env.NEWS_API_KEY || process.env.NEWSAPI_KEY;
-  
-  if (!apiKey) {
-    console.warn('NEWS_API_KEY not set, using mock news data');
-    return generateMockNews(category);
+  // Priority 1: Try RSS feeds (free, no API key required)
+  try {
+    const rssNewsService = require('./rssNewsService');
+    const rssArticles = await rssNewsService.fetchNewsFromRSS(category, query);
+    
+    if (rssArticles && rssArticles.length > 0) {
+      console.log(`✅ Using RSS news (${rssArticles.length} articles)`);
+      return rssArticles.slice(0, 30);
+    }
+  } catch (error) {
+    console.warn('RSS news service not available, falling back to free mock data:', error.message);
   }
+
+  // Priority 2: Use free mock data (never use paid NewsAPI to avoid costs)
+  console.log('Using free mock news data (RSS unavailable)');
+  return generateMockNews(category);
 
   try {
     let newsUrl;
@@ -74,6 +84,7 @@ async function fetchNewsFromAPI(category, country = null, query = null) {
       return articles.length > 0 ? articles : generateMockNews(category);
     }
 
+    // This code path should never be reached since we removed NewsAPI fallback
     return generateMockNews(category);
   } catch (error) {
     console.error(`Error fetching news (${category}):`, error.message);

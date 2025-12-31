@@ -1,12 +1,16 @@
 const { Pool } = require('pg');
-require('dotenv').config();
+const { getPostgresConfig, databaseName } = require('./config/database');
 
-const pool = new Pool({
-  user: process.env.DB_USER || 'user',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'stockdb',
-  password: process.env.DB_PASSWORD || 'password',
-  port: process.env.DB_PORT || 5432,
+// Create PostgreSQL connection pool with environment-based configuration
+const pool = new Pool(getPostgresConfig());
+
+// Log database connection info
+console.log(`📊 PostgreSQL: Connecting to database "${databaseName}" (${process.env.NODE_ENV || 'local'} environment)`);
+
+// Handle pool errors
+pool.on('error', (err, client) => {
+  console.error('Unexpected error on idle PostgreSQL client', err);
+  process.exit(-1);
 });
 
 // Initialize database schema
@@ -21,10 +25,46 @@ const initDb = async () => {
         auth_type VARCHAR(50) NOT NULL CHECK (auth_type IN ('custom', 'google')),
         google_id VARCHAR(255) UNIQUE,
         name VARCHAR(255),
+        username VARCHAR(255),
+        full_name VARCHAR(255),
+        avatar_url TEXT,
+        is_admin BOOLEAN DEFAULT FALSE,
+        is_superuser BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Add is_admin and is_superuser columns if they don't exist (migration)
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='is_admin') THEN
+            ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='is_superuser') THEN
+            ALTER TABLE users ADD COLUMN is_superuser BOOLEAN DEFAULT FALSE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='username') THEN
+            ALTER TABLE users ADD COLUMN username VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='full_name') THEN
+            ALTER TABLE users ADD COLUMN full_name VARCHAR(255);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='avatar_url') THEN
+            ALTER TABLE users ADD COLUMN avatar_url TEXT;
+          END IF;
+        END $$;
+      `);
+    } catch (alterError) {
+      console.warn('Could not add user profile columns (may already exist):', alterError.message);
+    }
 
     // Asset info table
     await pool.query(`
@@ -55,6 +95,26 @@ const initDb = async () => {
       `);
     } catch (alterError) {
       console.warn('Could not add logo_url column (may already exist):', alterError.message);
+    }
+
+    // Add category column if it doesn't exist (migration)
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='asset_info' AND column_name='category') THEN
+            ALTER TABLE asset_info ADD COLUMN category VARCHAR(50) DEFAULT 'Unknown';
+          END IF;
+        END $$;
+      `);
+      
+      // Update categories using the category utility
+      const { updateAllAssetCategories } = require('./utils/categoryUtils');
+      const updateResult = await updateAllAssetCategories(pool);
+      console.log('Asset categories updated:', updateResult);
+    } catch (alterError) {
+      console.warn('Could not add/update category column:', alterError.message);
     }
 
     // Crypto coin IDs table (maps database symbols to CoinGecko coin IDs)
@@ -106,6 +166,18 @@ const initDb = async () => {
         PRIMARY KEY (user_id, symbol),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (symbol) REFERENCES asset_info(symbol) ON DELETE CASCADE
+      );
+    `);
+
+    // User preferences table - User UI preferences
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_preferences (
+        user_id INTEGER PRIMARY KEY,
+        sidebar_collapsed BOOLEAN DEFAULT FALSE,
+        theme VARCHAR(50) DEFAULT 'dark',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
     `);
 
@@ -453,6 +525,275 @@ const initDb = async () => {
     `);
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_aggregates_service_date ON gcp_billing_aggregates(service_name, aggregation_date DESC);
+    `);
+
+    // API Call Logs table - Track all external API calls
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS api_call_logs (
+        id SERIAL PRIMARY KEY,
+        api_provider VARCHAR(100) NOT NULL,
+        api_name VARCHAR(100) NOT NULL,
+        endpoint VARCHAR(500),
+        method VARCHAR(10) DEFAULT 'GET',
+        status_code INTEGER,
+        response_time_ms INTEGER,
+        success BOOLEAN DEFAULT true,
+        error_message TEXT,
+        request_params JSONB,
+        response_size_bytes INTEGER,
+        quota_units_used INTEGER,
+        service_name VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create indexes for API call logs
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_api_logs_provider ON api_call_logs(api_provider);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_call_logs(created_at DESC);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_api_logs_provider_date ON api_call_logs(api_provider, created_at DESC);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_api_logs_service ON api_call_logs(service_name);
+    `);
+
+    // API Quota Tracking table - Track quota usage per API provider
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS api_quota_tracking (
+        id SERIAL PRIMARY KEY,
+        api_provider VARCHAR(100) NOT NULL,
+        quota_type VARCHAR(50) NOT NULL,
+        quota_limit INTEGER,
+        quota_used INTEGER DEFAULT 0,
+        quota_remaining INTEGER,
+        quota_reset_date TIMESTAMP,
+        quota_period VARCHAR(50) DEFAULT 'daily',
+        last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(api_provider, quota_type, quota_period)
+      );
+    `);
+
+    // Create indexes for quota tracking
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_quota_provider ON api_quota_tracking(api_provider);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_quota_last_updated ON api_quota_tracking(last_updated DESC);
+    `);
+
+    // Service Health Monitoring table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS service_health (
+        id SERIAL PRIMARY KEY,
+        service_name VARCHAR(100) NOT NULL UNIQUE,
+        service_type VARCHAR(50) NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'unknown',
+        health_status VARCHAR(20) NOT NULL DEFAULT 'unknown',
+        last_check TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_success TIMESTAMP,
+        last_failure TIMESTAMP,
+        error_message TEXT,
+        response_time_ms INTEGER,
+        metadata JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create indexes for service health
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_service_health_name ON service_health(service_name);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_service_health_status ON service_health(health_status);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_service_health_last_check ON service_health(last_check DESC);
+    `);
+
+    // API Providers table - Track all external APIs used in the application
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS api_providers (
+        id SERIAL PRIMARY KEY,
+        provider_key VARCHAR(100) UNIQUE NOT NULL,
+        provider_name VARCHAR(255) NOT NULL,
+        base_url VARCHAR(500),
+        api_key_env_var VARCHAR(100),
+        quota_limit INTEGER,
+        quota_period VARCHAR(50) DEFAULT 'daily',
+        quota_units_per_call INTEGER DEFAULT 1,
+        documentation_url TEXT,
+        status VARCHAR(50) DEFAULT 'active',
+        description TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_api_providers_key ON api_providers(provider_key);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_api_providers_status ON api_providers(status);
+    `);
+
+    // Application Services table - Track all services in the application
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS application_services (
+        id SERIAL PRIMARY KEY,
+        service_key VARCHAR(100) UNIQUE NOT NULL,
+        service_name VARCHAR(255) NOT NULL,
+        service_type VARCHAR(50) NOT NULL,
+        service_category VARCHAR(50),
+        description TEXT,
+        file_path VARCHAR(500),
+        status VARCHAR(50) DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_app_services_key ON application_services(service_key);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_app_services_type ON application_services(service_type);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_app_services_category ON application_services(service_category);
+    `);
+
+    // Service-API Mappings table - Link services to APIs they use
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        ticket_number VARCHAR(50) UNIQUE NOT NULL,
+        category VARCHAR(50) NOT NULL,
+        subject VARCHAR(255) NOT NULL,
+        description TEXT NOT NULL,
+        priority VARCHAR(20) NOT NULL DEFAULT 'unknown',
+        status VARCHAR(20) NOT NULL DEFAULT 'open',
+        assigned_to INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_user_id ON support_tickets(user_id);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets(status);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_category ON support_tickets(category);
+      CREATE INDEX IF NOT EXISTS idx_support_tickets_created_at ON support_tickets(created_at);
+
+      CREATE TABLE IF NOT EXISTS contact_messages (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        subject VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'new',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_contact_messages_user_id ON contact_messages(user_id);
+      CREATE INDEX IF NOT EXISTS idx_contact_messages_status ON contact_messages(status);
+      CREATE INDEX IF NOT EXISTS idx_contact_messages_created_at ON contact_messages(created_at);
+
+      CREATE TABLE IF NOT EXISTS ticket_replies (
+        id SERIAL PRIMARY KEY,
+        ticket_id INTEGER NOT NULL,
+        user_id INTEGER,
+        is_admin BOOLEAN DEFAULT FALSE,
+        message TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_ticket_replies_ticket_id ON ticket_replies(ticket_id);
+      CREATE INDEX IF NOT EXISTS idx_ticket_replies_created_at ON ticket_replies(created_at);
+
+      CREATE TABLE IF NOT EXISTS contact_replies (
+        id SERIAL PRIMARY KEY,
+        contact_message_id INTEGER NOT NULL,
+        user_id INTEGER,
+        is_admin BOOLEAN DEFAULT FALSE,
+        message TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (contact_message_id) REFERENCES contact_messages(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_contact_replies_message_id ON contact_replies(contact_message_id);
+      CREATE INDEX IF NOT EXISTS idx_contact_replies_created_at ON contact_replies(created_at);
+
+      CREATE TABLE IF NOT EXISTS service_api_mappings (
+        id SERIAL PRIMARY KEY,
+        service_key VARCHAR(100) NOT NULL,
+        api_provider_key VARCHAR(100) NOT NULL,
+        usage_type VARCHAR(50) DEFAULT 'primary',
+        is_required BOOLEAN DEFAULT true,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(service_key, api_provider_key),
+        FOREIGN KEY (service_key) REFERENCES application_services(service_key) ON DELETE CASCADE,
+        FOREIGN KEY (api_provider_key) REFERENCES api_providers(provider_key) ON DELETE CASCADE
+      );
+    `);
+
+    // Add updated_at column if it doesn't exist (migration)
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='service_api_mappings' AND column_name='updated_at') THEN
+            ALTER TABLE service_api_mappings ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+          END IF;
+        END $$;
+      `);
+    } catch (alterError) {
+      console.warn('Could not add updated_at column (may already exist):', alterError.message);
+    }
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_service_api_service ON service_api_mappings(service_key);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_service_api_provider ON service_api_mappings(api_provider_key);
+    `);
+
+    // Asset Search Tracking table - Track how many times users search for assets
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS asset_search_tracking (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(50) NOT NULL,
+        search_count INTEGER DEFAULT 1,
+        last_searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(symbol)
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_asset_search_symbol ON asset_search_tracking(symbol);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_asset_search_count ON asset_search_tracking(search_count DESC);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_asset_search_last_searched ON asset_search_tracking(last_searched_at DESC);
     `);
 
     console.log('Database schema initialized');

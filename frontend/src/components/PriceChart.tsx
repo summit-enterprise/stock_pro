@@ -2691,7 +2691,7 @@ export default function PriceChart({ data, symbol, isDarkMode = false, timeRange
 
   if (!data || data.length === 0) {
     return (
-      <div className="h-96 flex items-center justify-center bg-gray-50 dark:bg-zinc-900 rounded-xl">
+      <div className="h-96 flex items-center justify-center bg-gray-100 dark:bg-zinc-900 rounded-xl">
         <p className="text-gray-600 dark:text-gray-400">No chart data available</p>
       </div>
     );
@@ -2738,7 +2738,7 @@ export default function PriceChart({ data, symbol, isDarkMode = false, timeRange
               📊 Indicators {selectedIndicators.size > 0 && `(${selectedIndicators.size}/10)`}
             </button>
             {showIndicators && (
-              <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-zinc-800 rounded-lg shadow-lg border border-gray-200 dark:border-zinc-700 z-20 max-h-[600px] overflow-hidden flex flex-col">
+              <div className="absolute right-0 mt-2 w-80 bg-gray-50 dark:bg-zinc-800 rounded-lg shadow-lg border border-gray-200 dark:border-zinc-700 z-20 max-h-[600px] overflow-hidden flex flex-col">
                 <div className="p-3 border-b border-gray-200 dark:border-zinc-700">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
@@ -2773,7 +2773,7 @@ export default function PriceChart({ data, symbol, isDarkMode = false, timeRange
                 <div className="overflow-y-auto flex-1">
                   {Object.entries(indicatorsByCategory).map(([category, indicators]) => (
                     <div key={category} className="mb-2">
-                      <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-zinc-900">
+                      <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase bg-gray-100 dark:bg-zinc-900">
                         {category}
                       </div>
                       {indicators.map((indicator) => (
@@ -2980,7 +2980,7 @@ export default function PriceChart({ data, symbol, isDarkMode = false, timeRange
   );
 
   return (
-    <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6 relative">
+    <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6 relative">
       {chartContent}
     </div>
   );

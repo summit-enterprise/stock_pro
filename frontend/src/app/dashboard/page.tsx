@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import ProtectedRoute from '@/components/ProtectedRoute';
 import SearchBar from '@/components/SearchBar';
 import MarketTiles from '@/components/MarketTiles';
+import MarketChart from '@/components/MarketChart';
 import WatchlistSection from '@/components/WatchlistSection';
 import MarketMovers from '@/components/MarketMovers';
 import PortfolioSummary from '@/components/PortfolioSummary';
 import MarketNews from '@/components/MarketNews';
+import TrendingAssets from '@/components/TrendingAssets';
 
 interface User {
   id: number;
@@ -16,9 +19,21 @@ interface User {
   auth_type: string;
 }
 
+interface SelectedMarketTile {
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  type: 'index' | 'crypto' | 'commodity';
+  category?: string;
+}
+
 export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedTile, setSelectedTile] = useState<SelectedMarketTile | null>(null);
+  const [marketTiles, setMarketTiles] = useState<SelectedMarketTile[]>([]);
   const router = useRouter();
 
   useEffect(() => {
@@ -43,6 +58,46 @@ export default function Dashboard() {
     }
   }, [router]);
 
+  // Fetch market tiles and set default selection (S&P 500)
+  useEffect(() => {
+    const fetchMarketData = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch('http://localhost:3001/api/market/overview', {
+          headers: {
+            'Authorization': token ? `Bearer ${token}` : '',
+          },
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const tiles = data.tiles || [];
+          setMarketTiles(tiles);
+          
+          // Set S&P 500 as default selection if not already selected
+          if (!selectedTile && tiles.length > 0) {
+            const sp500 = tiles.find((t: SelectedMarketTile) => t.symbol === '^GSPC' || t.name.includes('S&P 500'));
+            if (sp500) {
+              setSelectedTile(sp500);
+            } else {
+              // Fallback to first tile
+              setSelectedTile(tiles[0]);
+            }
+          }
+        } else {
+          console.error('Error fetching market data:', response.status, response.statusText);
+        }
+      } catch (error) {
+        console.error('Error fetching market data:', error);
+      }
+    };
+
+    fetchMarketData();
+  }, []);
+
+  const handleTileSelect = (tile: SelectedMarketTile) => {
+    setSelectedTile(tile);
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white dark:bg-black pt-16">
@@ -56,7 +111,8 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-white dark:bg-black pt-16">
+    <ProtectedRoute>
+      <div className="min-h-screen bg-white dark:bg-black pt-16">
       {/* Main Content */}
       <div className="flex-1">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -75,12 +131,32 @@ export default function Dashboard() {
             <SearchBar />
           </div>
 
-          {/* Market Tiles */}
+          {/* Market Chart and Tiles */}
           <div className="mb-12">
             <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">
               Market Overview
             </h2>
-            <MarketTiles />
+            
+            {/* Market Chart - shown above tiles */}
+            {selectedTile && (
+              <div className="mb-6">
+                <MarketChart
+                  symbol={selectedTile.symbol}
+                  name={selectedTile.name}
+                  currentPrice={selectedTile.price}
+                  change={selectedTile.change}
+                  changePercent={selectedTile.changePercent}
+                  category={selectedTile.category}
+                  isDarkMode={typeof window !== 'undefined' && document.documentElement.classList.contains('dark')}
+                />
+              </div>
+            )}
+
+            {/* Market Tiles */}
+            <MarketTiles
+              selectedSymbol={selectedTile?.symbol}
+              onTileSelect={handleTileSelect}
+            />
           </div>
 
           {/* Watchlist and Portfolio Row */}
@@ -94,13 +170,19 @@ export default function Dashboard() {
             <MarketMovers />
           </div>
 
+          {/* Trending Assets */}
+          <div className="mb-6">
+            <TrendingAssets limit={10} timeRange="7d" />
+          </div>
+
           {/* Market News */}
           <div className="mb-6">
             <MarketNews />
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </ProtectedRoute>
   );
 }
 

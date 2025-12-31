@@ -1,29 +1,11 @@
 const express = require('express');
 const { pool } = require('../db');
+const { verifyToken } = require('../middleware/auth');
 const { ratingsService } = require('../services');
 const router = express.Router();
 
-// Middleware to verify user token (optional for ratings)
-const verifyToken = async (req, res, next) => {
-  try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) {
-      // Ratings can be public, but we'll still try to get user if available
-      req.userId = null;
-      return next();
-    }
-
-    const jwt = require('jsonwebtoken');
-    const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.userId = decoded.userId;
-    next();
-  } catch (error) {
-    // Continue without user ID for public access
-    req.userId = null;
-    next();
-  }
-};
+// Protect all ratings routes
+router.use(verifyToken);
 
 // Get consensus analyst ratings for a symbol (only for equities)
 router.get('/:symbol', verifyToken, async (req, res) => {

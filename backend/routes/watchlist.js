@@ -24,7 +24,7 @@ const verifyToken = async (req, res, next) => {
 router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT w.symbol, ai.name, ai.type, ai.exchange, ai.logo_url
+      `SELECT w.symbol, ai.name, ai.type, ai.category, ai.exchange, ai.logo_url
        FROM watchlist w
        LEFT JOIN asset_info ai ON w.symbol = ai.symbol
        WHERE w.user_id = $1
@@ -42,10 +42,14 @@ router.get('/', verifyToken, async (req, res) => {
             // Use mock data
             const mockData = require('../services/utils/mockData');
             const priceData = mockData.getCurrentPrice(row.symbol);
+            const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+            const category = row.category || normalizeCategory(determineCategory(row.symbol, row.type, row.exchange)) || 'Unknown';
+            
             return {
               symbol: row.symbol,
               name: row.name || row.symbol,
               type: row.type,
+              category: category,
               logoUrl: row.logo_url || null,
               price: priceData.price,
               change: priceData.change,
@@ -54,10 +58,16 @@ router.get('/', verifyToken, async (req, res) => {
           }
 
           const axios = require('axios');
+          const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+          const category = row.category || normalizeCategory(determineCategory(row.symbol, row.type)) || 'Unknown';
+          
           if (!process.env.POLYGON_API_KEY) {
             return {
               symbol: row.symbol,
               name: row.name || row.symbol,
+              type: row.type,
+              category: category,
+              logoUrl: row.logo_url || null,
               price: 0,
               change: 0,
               changePercent: 0,
@@ -79,11 +89,15 @@ router.get('/', verifyToken, async (req, res) => {
             const currentPrice = data.c;
             const change = currentPrice - previousClose;
             const changePercent = previousClose !== 0 ? ((change / previousClose) * 100) : 0;
+            
+            const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+            const category = row.category || normalizeCategory(determineCategory(row.symbol, row.type, row.exchange)) || 'Unknown';
 
             return {
               symbol: row.symbol,
               name: row.name || row.symbol,
               type: row.type,
+              category: category,
               logoUrl: row.logo_url || null,
               price: currentPrice,
               change: change,
@@ -94,10 +108,14 @@ router.get('/', verifyToken, async (req, res) => {
           console.error(`Error fetching price for ${row.symbol}:`, error.message);
         }
 
+        const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+        const category = row.category || normalizeCategory(determineCategory(row.symbol, row.type)) || 'Unknown';
+        
         return {
           symbol: row.symbol,
           name: row.name || row.symbol,
           type: row.type,
+          category: category,
           logoUrl: row.logo_url || null,
           price: 0,
           change: 0,
@@ -122,6 +140,29 @@ router.post('/', verifyToken, async (req, res) => {
       return res.status(400).json({ error: 'Symbol is required' });
     }
 
+    // Verify user exists in database
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [req.userId]);
+    if (userCheck.rows.length === 0) {
+      console.error(`User ${req.userId} from token does not exist in database`);
+      return res.status(404).json({ error: 'User not found', message: 'User account does not exist' });
+    }
+
+    // Ensure asset_info exists for this symbol
+    const assetCheck = await pool.query('SELECT symbol FROM asset_info WHERE symbol = $1', [symbol]);
+    if (assetCheck.rows.length === 0) {
+      // Create asset_info entry if it doesn't exist
+      const { determineCategory, normalizeCategory } = require('../utils/categoryUtils');
+      const exchange = 'NYSE'; // Default exchange
+      const category = normalizeCategory(determineCategory(symbol, 'stock', exchange)) || 'Unknown';
+      
+      await pool.query(
+        `INSERT INTO asset_info (symbol, name, type, category, exchange, currency, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+         ON CONFLICT (symbol) DO UPDATE SET category = EXCLUDED.category`,
+        [symbol, symbol, 'stock', category, exchange, 'USD']
+      );
+    }
+
     await pool.query(
       'INSERT INTO watchlist (user_id, symbol) VALUES ($1, $2) ON CONFLICT (user_id, symbol) DO NOTHING',
       [req.userId, symbol]
@@ -130,6 +171,15 @@ router.post('/', verifyToken, async (req, res) => {
     res.json({ message: 'Added to watchlist' });
   } catch (error) {
     console.error('Add to watchlist error:', error);
+    
+    // Handle foreign key constraint violation
+    if (error.code === '23503') {
+      return res.status(404).json({ 
+        error: 'User not found', 
+        message: 'User account does not exist. Please log in again.' 
+      });
+    }
+    
     res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });

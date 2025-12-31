@@ -21,6 +21,16 @@ export default function PortfolioSummary() {
 
   useEffect(() => {
     fetchPortfolio();
+    
+    // Listen for portfolio changes
+    const handlePortfolioChange = () => {
+      fetchPortfolio();
+    };
+    
+    window.addEventListener('portfolio-changed', handlePortfolioChange);
+    return () => {
+      window.removeEventListener('portfolio-changed', handlePortfolioChange);
+    };
   }, []);
 
   const fetchPortfolio = async () => {
@@ -50,7 +60,7 @@ export default function PortfolioSummary() {
 
   if (loading) {
     return (
-      <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+      <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
         <div className="animate-pulse">
           <div className="h-6 bg-gray-200 dark:bg-zinc-800 rounded w-48 mb-4"></div>
           <div className="h-12 bg-gray-200 dark:bg-zinc-800 rounded w-64 mb-2"></div>
@@ -62,7 +72,7 @@ export default function PortfolioSummary() {
 
   if (!portfolio) {
     return (
-      <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+      <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
             <span>💼</span> Portfolio
@@ -76,7 +86,7 @@ export default function PortfolioSummary() {
   }
 
   return (
-    <div className="bg-gray-50 dark:bg-zinc-900 rounded-xl p-6">
+    <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
           <span>💼</span> Portfolio Overview
