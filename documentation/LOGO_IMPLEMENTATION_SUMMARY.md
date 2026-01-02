@@ -143,3 +143,5 @@ Test crypto logos:
 node -e "const logoService = require('./services/logoService'); logoService.getAssetLogo('BTC', 'crypto', 'Bitcoin').then(url => console.log(url));"
 ```
 
+
+

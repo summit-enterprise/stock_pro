@@ -4,6 +4,9 @@ import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ProtectedRoute from '@/components/ProtectedRoute';
+import AssetIcon from '@/components/AssetIcon';
+import UnifiedPriceChart from '@/components/UnifiedPriceChart';
+import { normalizeAssetName } from '@/utils/assetNameUtils';
 import {
   LineChart,
   Line,
@@ -33,25 +36,18 @@ interface CryptoMarketData {
   coinId: string;
 }
 
-interface ChartDataPoint {
-  date: string;
-  price: number;
-  marketCap: number;
-  volume: number;
-}
 
 export default function CryptoPage() {
   const router = useRouter();
   const [cryptoData, setCryptoData] = useState<CryptoMarketData[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCrypto, setSelectedCrypto] = useState<CryptoMarketData | null>(null);
-  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
-  const [chartLoading, setChartLoading] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [sortBy, setSortBy] = useState<'rank' | 'name' | 'price' | 'marketCap' | 'volume'>('rank');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [timeRange, setTimeRange] = useState('1Y');
   const itemsPerPage = 50;
 
   useEffect(() => {
@@ -69,11 +65,6 @@ export default function CryptoPage() {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (selectedCrypto) {
-      fetchChartData(selectedCrypto.symbol);
-    }
-  }, [selectedCrypto]);
 
   const fetchCryptoData = async () => {
     try {
@@ -104,40 +95,6 @@ export default function CryptoPage() {
     }
   };
 
-  const fetchChartData = async (symbol: string) => {
-    try {
-      setChartLoading(true);
-      const token = localStorage.getItem('token');
-      const encodedSymbol = encodeURIComponent(`X:${symbol}USD`);
-      
-      const response = await fetch(
-        `http://localhost:3001/api/assets/${encodedSymbol}?range=1Y`,
-        {
-          headers: {
-            'Authorization': token ? `Bearer ${token}` : '',
-          },
-        }
-      );
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result.historicalData && Array.isArray(result.historicalData)) {
-          const formatted = result.historicalData.map((point: any) => ({
-            date: new Date(point.timestamp).toISOString().split('T')[0],
-            price: parseFloat(point.close) || 0,
-            marketCap: 0, // Market cap not available in historical data
-            volume: parseFloat(point.volume) || 0,
-          }));
-          setChartData(formatted);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching chart data:', error);
-      setChartData([]);
-    } finally {
-      setChartLoading(false);
-    }
-  };
 
   // Filter and sort crypto data
   const filteredAndSortedData = useMemo(() => {
@@ -287,80 +244,20 @@ export default function CryptoPage() {
 
           {/* Price Chart */}
           {selectedCrypto && (
-            <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6 mb-6">
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                      {selectedCrypto.name} ({selectedCrypto.symbol})
-                    </h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      {formatPrice(selectedCrypto.price)}
-                      <span className={`ml-2 ${getChangeColor(selectedCrypto.priceChange24h)}`}>
-                        {formatPercent(selectedCrypto.priceChange24h)} (24h)
-                      </span>
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {chartLoading ? (
-                <div className="h-96 flex items-center justify-center">
-                  <div className="animate-pulse text-gray-600 dark:text-gray-400">
-                    Loading chart data...
-                  </div>
-                </div>
-              ) : chartData.length === 0 ? (
-                <div className="h-96 flex items-center justify-center">
-                  <p className="text-gray-600 dark:text-gray-400">
-                    No chart data available
-                  </p>
-                </div>
-              ) : (
-                <div className="h-96">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 40 }}>
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke={isDarkMode ? '#3f3f46' : '#e4e4e7'}
-                        opacity={0.5}
-                      />
-                      <XAxis
-                        dataKey="date"
-                        stroke={isDarkMode ? '#6b7280' : '#9ca3af'}
-                        tick={{ fill: isDarkMode ? '#9ca3af' : '#6b7280', fontSize: 12 }}
-                        angle={-45}
-                        textAnchor="end"
-                        height={60}
-                        interval="preserveStartEnd"
-                      />
-                      <YAxis
-                        stroke={isDarkMode ? '#6b7280' : '#9ca3af'}
-                        tick={{ fill: isDarkMode ? '#9ca3af' : '#6b7280', fontSize: 12 }}
-                        tickFormatter={(value) => formatPrice(value)}
-                      />
-                      <Tooltip content={<CustomTooltip />} />
-                      <Area
-                        type="monotone"
-                        dataKey="price"
-                        stroke="none"
-                        fill="#10B981"
-                        fillOpacity={0.25}
-                        isAnimationActive={false}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="price"
-                        stroke="#10B981"
-                        strokeWidth={3}
-                        dot={false}
-                        activeDot={{ r: 5, fill: '#10B981', stroke: '#ffffff', strokeWidth: 2 }}
-                        isAnimationActive={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
+            <div className="mb-6">
+              <UnifiedPriceChart
+                symbol={`X:${selectedCrypto.symbol}USD`}
+                name={normalizeAssetName(selectedCrypto.name)}
+                timeRange={timeRange}
+                onTimeRangeChange={setTimeRange}
+                showTimeRangeSelector={true}
+                showPriceInfo={true}
+                currentPrice={selectedCrypto.price}
+                change={selectedCrypto.priceChange24h}
+                changePercent={selectedCrypto.priceChange24h}
+                isDarkMode={isDarkMode}
+                height={400}
+              />
             </div>
           )}
 
@@ -449,23 +346,22 @@ export default function CryptoPage() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2">
-                        {crypto.logoUrl ? (
-                          <img
-                            src={crypto.logoUrl}
-                            alt={crypto.name}
-                            className="w-6 h-6 rounded-full"
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = 'none';
-                            }}
-                          />
-                        ) : null}
+                        <AssetIcon
+                          symbol={crypto.symbol}
+                          name={crypto.name}
+                          type="crypto"
+                          category="Crypto"
+                          logoUrl={crypto.logoUrl}
+                          size={24}
+                          className="flex-shrink-0"
+                        />
                         <div>
                           <Link
                             href={`/asset/X:${crypto.symbol}USD`}
                             onClick={(e) => e.stopPropagation()}
                             className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
                           >
-                            {crypto.name}
+                            {normalizeAssetName(crypto.name)}
                           </Link>
                           <div className="text-xs text-gray-500 dark:text-gray-400">
                             {crypto.symbol}

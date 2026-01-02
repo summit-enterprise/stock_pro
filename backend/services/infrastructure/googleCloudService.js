@@ -16,13 +16,16 @@ let isInitialized = false;
 /**
  * Initialize Google Cloud Storage client
  * Supports multiple authentication methods (in order of priority):
- * 1. Service account key file (GOOGLE_APPLICATION_CREDENTIALS)
+ * 1. Service account key file (GOOGLE_APPLICATION_CREDENTIALS) - RECOMMENDED
+ *    - Service Account: stock-pro-svc@project-finance-482417.iam.gserviceaccount.com
+ *    - Provides full access including signed URL generation
  * 2. Service account JSON in env variable (GCP_SERVICE_ACCOUNT_KEY)
- * 3. Application Default Credentials (ADC) - Recommended
+ * 3. Application Default Credentials (ADC) - Fallback
  *    - Uses gcloud auth application-default login
  *    - Works with user accounts and service account impersonation
  *    - Automatically detected by Google Cloud SDK
  * 4. Default credentials (if running on GCP - Cloud Run, Compute Engine, etc.)
+ *    - Uses attached service account automatically
  */
 async function initializeGCP() {
   if (isInitialized && storageClient) {
@@ -33,12 +36,13 @@ async function initializeGCP() {
     let storageOptions = {};
     let authMethod = '';
 
-    // Method 1: Service account key file path
+    // Method 1: Service account key file path (RECOMMENDED)
     if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
       const keyPath = path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS);
       storageOptions.keyFilename = keyPath;
-      authMethod = 'Service Account Key File';
-      console.log(`GCP: Using ${authMethod}: ${keyPath}`);
+      authMethod = 'Service Account Key File (stock-pro-svc@project-finance-482417.iam.gserviceaccount.com)';
+      console.log(`GCP: Using ${authMethod}`);
+      console.log(`  → Key file: ${keyPath}`);
     }
     // Method 2: Service account JSON from environment variable
     else if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
@@ -52,18 +56,18 @@ async function initializeGCP() {
         throw new Error('Invalid GCP_SERVICE_ACCOUNT_KEY format. Must be valid JSON.');
       }
     }
-    // Method 3: Application Default Credentials (ADC) - Recommended
+    // Method 3: Application Default Credentials (ADC) - Fallback
     // This will automatically use credentials from:
-    // - gcloud auth application-default login
+    // - Service account attached to Cloud Run/GKE/Compute Engine (metadata server)
+    // - gcloud auth application-default login (for local dev without key file)
     // - GOOGLE_APPLICATION_CREDENTIALS environment variable
-    // - Metadata server (if running on GCP)
     else {
       authMethod = 'Application Default Credentials (ADC)';
       console.log(`GCP: Using ${authMethod}`);
       console.log('  → Will use credentials from:');
-      console.log('    - gcloud auth application-default login');
-      console.log('    - GOOGLE_APPLICATION_CREDENTIALS env var');
-      console.log('    - GCP metadata server (if on GCP)');
+      console.log('    - GCP metadata server (if on GCP with attached service account)');
+      console.log('    - gcloud auth application-default login (local dev fallback)');
+      console.log('  ⚠️  Note: For signed URLs, use service account key file (Method 1)');
       // No explicit credentials needed - SDK will auto-detect
     }
 
@@ -80,7 +84,8 @@ async function initializeGCP() {
     return storageClient;
   } catch (error) {
     console.error('❌ Failed to initialize Google Cloud Storage:', error.message);
-    console.error('💡 Tip: Run "gcloud auth application-default login" to set up ADC');
+    console.error('💡 Tip: Set GOOGLE_APPLICATION_CREDENTIALS to service account key file path');
+    console.error('   Service Account: stock-pro-svc@project-finance-482417.iam.gserviceaccount.com');
     throw error;
   }
 }

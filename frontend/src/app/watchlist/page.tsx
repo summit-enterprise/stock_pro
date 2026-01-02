@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ProtectedRoute from '@/components/ProtectedRoute';
-import WatchlistPriceChart from '@/components/WatchlistPriceChart';
+import UnifiedPriceChart from '@/components/UnifiedPriceChart';
 import ConfirmationModal from '@/components/ConfirmationModal';
 
 interface WatchlistItem {
@@ -33,7 +33,8 @@ export default function WatchlistPage() {
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(7);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [addAssetSearchQuery, setAddAssetSearchQuery] = useState(''); // Search for new assets to add
+  const [watchlistFilterQuery, setWatchlistFilterQuery] = useState(''); // Filter existing watchlist items
   const [sortBy, setSortBy] = useState<'name' | 'category'>('name');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -111,18 +112,18 @@ export default function WatchlistPage() {
     return () => observer.disconnect();
   }, []);
 
-  // Fetch search results when typing
+  // Fetch search results when typing in "add asset" search
   useEffect(() => {
-    if (searchQuery.length >= 1) {
+    if (addAssetSearchQuery.length >= 1) {
       const debounceTimer = setTimeout(() => {
-        fetchSearchResults(searchQuery);
+        fetchSearchResults(addAssetSearchQuery);
       }, 300);
       return () => clearTimeout(debounceTimer);
     } else {
       setSearchResults([]);
       setShowSearchResults(false);
     }
-  }, [searchQuery]);
+  }, [addAssetSearchQuery]);
 
   // Close search dropdown when clicking outside
   useEffect(() => {
@@ -370,10 +371,10 @@ export default function WatchlistPage() {
     }
   };
 
-  // Filter watchlist based on search query and category
+  // Filter watchlist based on watchlist filter query and category
   let filteredWatchlist = filteredWatchlistByCategory.filter(item =>
-    item.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.name.toLowerCase().includes(searchQuery.toLowerCase())
+    item.symbol.toLowerCase().includes(watchlistFilterQuery.toLowerCase()) ||
+    item.name.toLowerCase().includes(watchlistFilterQuery.toLowerCase())
   );
 
   // Sort watchlist
@@ -397,10 +398,10 @@ export default function WatchlistPage() {
   const endIndex = startIndex + itemsPerPage;
   const currentItems = filteredWatchlist.slice(startIndex, endIndex);
 
-  // Reset to page 1 when search query changes
+  // Reset to page 1 when watchlist filter query changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, itemsPerPage]);
+  }, [watchlistFilterQuery, itemsPerPage]);
 
 
   if (loading) {
@@ -430,49 +431,29 @@ export default function WatchlistPage() {
           </p>
         </div>
 
-        {/* Category Filter and Search Bar */}
-        <div className="mb-6 flex flex-col sm:flex-row gap-4">
-          {/* Category Filter */}
-          {categories.length > 0 && (
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                Filter by Category:
-              </label>
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Categories</option>
-                {categories.map(category => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
-
-        {/* Search Bar */}
-        <div className="mb-6 relative" ref={searchRef}>
-          <input
-            type="text"
-            placeholder="Search assets to add to watchlist..."
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              if (e.target.value.length > 0) {
-                setShowSearchResults(true);
-              }
-            }}
-            onFocus={() => {
-              if (searchResults.length > 0) {
-                setShowSearchResults(true);
-              }
-            }}
-            className="w-full md:w-96 px-4 py-2 border border-gray-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+        {/* Add Asset Search Bar - Top Search */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Add Assets to Watchlist
+          </label>
+          <div className="relative" ref={searchRef}>
+            <input
+              type="text"
+              placeholder="Search any asset to add to watchlist..."
+              value={addAssetSearchQuery}
+              onChange={(e) => {
+                setAddAssetSearchQuery(e.target.value);
+                if (e.target.value.length > 0) {
+                  setShowSearchResults(true);
+                }
+              }}
+              onFocus={() => {
+                if (searchResults.length > 0) {
+                  setShowSearchResults(true);
+                }
+              }}
+              className="w-full md:w-96 px-4 py-2 border border-gray-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           {/* Search Results Dropdown */}
           {showSearchResults && searchResults.length > 0 && (
             <div className="absolute z-50 w-full md:w-96 mt-1 bg-gray-50 dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg shadow-lg max-h-96 overflow-y-auto">
@@ -529,35 +510,77 @@ export default function WatchlistPage() {
               )}
             </div>
           )}
+          </div>
         </div>
 
         {/* Price Performance Chart - Full Width Above Table */}
-        <div className="mb-6">
-          <WatchlistPriceChart 
-            selectedSymbol={selectedSymbol} 
-            isDarkMode={isDarkMode}
-            watchlistItems={watchlist}
-            selectedCategory={selectedCategory}
-            onCategoryChange={setSelectedCategory}
-          />
-        </div>
+        {selectedSymbol && (
+          <div className="mb-6">
+            <UnifiedPriceChart
+              symbol={selectedSymbol}
+              name={watchlist.find(item => item.symbol === selectedSymbol)?.name}
+              isDarkMode={isDarkMode}
+              showTimeRangeSelector={true}
+              showPriceInfo={true}
+              height={400}
+            />
+          </div>
+        )}
 
-        {/* Sort and Filter Controls */}
-        <div className="mb-4 flex items-center gap-4">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Sort by:
-          </label>
-          <select
-            value={sortBy}
-            onChange={(e) => {
-              setSortBy(e.target.value as 'name' | 'category');
-              setCurrentPage(1); // Reset to first page when sorting changes
-            }}
-            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="name">Company Name</option>
-            <option value="category">Category</option>
-          </select>
+        {/* Watchlist Filter and Sort Controls */}
+        <div className="mb-4 flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+          {/* Search Bar for Filtering Watchlist */}
+          <div className="flex-1 max-w-md">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Search Your Watchlist
+            </label>
+            <input
+              type="text"
+              placeholder="Search assets in your watchlist..."
+              value={watchlistFilterQuery}
+              onChange={(e) => setWatchlistFilterQuery(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          {/* Category Filter */}
+          {categories.length > 0 && (
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Category:
+              </label>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Categories</option>
+                {categories.map(category => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Sort */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Sort by:
+            </label>
+            <select
+              value={sortBy}
+              onChange={(e) => {
+                setSortBy(e.target.value as 'name' | 'category');
+                setCurrentPage(1); // Reset to first page when sorting changes
+              }}
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-zinc-600 rounded-md bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="name">Company Name</option>
+              <option value="category">Category</option>
+            </select>
+          </div>
         </div>
 
         {/* Watchlist Table */}
@@ -566,7 +589,7 @@ export default function WatchlistPage() {
             {filteredWatchlist.length === 0 ? (
               <div className="text-center py-12">
                 <p className="text-gray-600 dark:text-gray-400 mb-4">
-                  {searchQuery ? 'No assets found matching your search.' : 'Your watchlist is empty.'}
+                  {watchlistFilterQuery ? 'No assets found matching your search.' : 'Your watchlist is empty.'}
                 </p>
                 <Link
                   href="/dashboard"
@@ -660,21 +683,33 @@ export default function WatchlistPage() {
                               </span>
                             </td>
                             <td className="py-4 px-4 text-right font-semibold text-gray-900 dark:text-white">
-                              ${item.price.toFixed(2)}
+                              ${item.price != null ? item.price.toFixed(2) : 'N/A'}
                             </td>
                             <td className={`py-4 px-4 text-right font-medium ${
-                              item.change >= 0
+                              (item.change ?? 0) >= 0
                                 ? 'text-green-600 dark:text-green-400'
                                 : 'text-red-600 dark:text-red-400'
                             }`}>
-                              {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}
+                              {item.change != null ? (
+                                <>
+                                  {item.change >= 0 ? '+' : ''}{item.change.toFixed(2)}
+                                </>
+                              ) : (
+                                'N/A'
+                              )}
                             </td>
                             <td className={`py-4 px-4 text-right font-medium ${
-                              item.changePercent >= 0
+                              (item.changePercent ?? 0) >= 0
                                 ? 'text-green-600 dark:text-green-400'
                                 : 'text-red-600 dark:text-red-400'
                             }`}>
-                              {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
+                              {item.changePercent != null ? (
+                                <>
+                                  {item.changePercent >= 0 ? '+' : ''}{item.changePercent.toFixed(2)}%
+                                </>
+                              ) : (
+                                'N/A'
+                              )}
                             </td>
                             <td className="py-4 px-4 text-center">
                               <button

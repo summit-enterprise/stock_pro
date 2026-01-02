@@ -4,6 +4,7 @@
  */
 
 const { getBucket, ensureBucket } = require('./googleCloudService');
+const { getBucketName } = require('../../utils/bucketConfig');
 const archiver = require('archiver');
 const sharp = require('sharp');
 const path = require('path');
@@ -11,7 +12,7 @@ const fs = require('fs').promises;
 const { createReadStream, createWriteStream } = require('fs');
 
 // Default bucket name from environment
-const DEFAULT_BUCKET = process.env.GCP_STORAGE_BUCKET || 'stock-app-assets';
+const DEFAULT_BUCKET = getBucketName();
 
 /**
  * Compression options
@@ -191,8 +192,19 @@ async function uploadFile(
     });
 
     // Make file publicly accessible if requested
+    // Note: If uniform bucket-level access is enabled, we can't set individual file ACLs
     if (options.public) {
-      await bucket.file(destinationPath).makePublic();
+      try {
+        await bucket.file(destinationPath).makePublic();
+      } catch (error) {
+        // If uniform bucket-level access is enabled, this will fail
+        // In that case, we'll use the bucket's IAM policy for public access
+        if (error.message && error.message.includes('uniform bucket-level access')) {
+          console.warn(`⚠️  Cannot set file ACL (uniform bucket-level access enabled). File will use bucket IAM policy.`);
+        } else {
+          throw error;
+        }
+      }
     }
 
     const publicUrl = options.public
@@ -337,10 +349,24 @@ async function uploadFromBuffer(
     await file.save(buffer, { metadata });
 
     // Make file publicly accessible if requested
+    // Note: If uniform bucket-level access is enabled, we can't set individual file ACLs
+    // In that case, the bucket's IAM policy controls access
     if (options.public) {
-      await file.makePublic();
+      try {
+        await file.makePublic();
+      } catch (error) {
+        // If uniform bucket-level access is enabled, this will fail
+        // In that case, we'll use the bucket's IAM policy for public access
+        if (error.message && error.message.includes('uniform bucket-level access')) {
+          console.warn(`⚠️  Cannot set file ACL (uniform bucket-level access enabled). File will use bucket IAM policy.`);
+        } else {
+          throw error;
+        }
+      }
     }
 
+    // For uniform bucket-level access, public files are accessible via direct URL
+    // if the bucket has public IAM policy. Otherwise, use signed URLs.
     const publicUrl = options.public
       ? `https://storage.googleapis.com/${bucketName}/${destinationPath}`
       : null;
@@ -396,12 +422,26 @@ async function getSignedUrl(
   options = {}
 ) {
   try {
+    // Use environment-specific bucket (local/dev/prod)
     const bucketName = options.bucket || DEFAULT_BUCKET;
+    const { getCurrentEnvironment } = require('../../utils/bucketConfig');
+    const currentEnv = getCurrentEnvironment();
+    
+    console.log(`[STORAGE] Generating signed URL for ${currentEnv} environment, bucket: ${bucketName}, path: ${destinationPath}`);
+    
     const bucket = await getBucket(bucketName);
     const file = bucket.file(destinationPath);
 
     const expiresIn = options.expires || Date.now() + 60 * 60 * 1000; // 1 hour default
     
+    // Check if file exists first
+    const [exists] = await file.exists();
+    if (!exists) {
+      throw new Error(`File not found: ${destinationPath}`);
+    }
+
+    // Try to get signed URL
+    // Note: Signed URLs require service account credentials with client_email
     const [url] = await file.getSignedUrl({
       version: 'v4',
       action: 'read',
@@ -410,6 +450,17 @@ async function getSignedUrl(
 
     return { url, expires: expiresIn };
   } catch (error) {
+    // If signing fails due to missing credentials, provide helpful error
+    if (error.message && error.message.includes('client_email')) {
+      const errorMsg = 'GCP authentication error: Cannot generate signed URLs without service account credentials. ' +
+        'Please set up GCP credentials using one of these methods:\n' +
+        '1. Set GOOGLE_APPLICATION_CREDENTIALS to path of service account key file (RECOMMENDED)\n' +
+        '   Service Account: stock-pro-svc@project-finance-482417.iam.gserviceaccount.com\n' +
+        '2. Set GCP_SERVICE_ACCOUNT_KEY to service account JSON string\n' +
+        '3. For production on GCP, attach service account to Cloud Run/GKE/Compute Engine';
+      console.error('Signed URL error:', errorMsg);
+      throw new Error(errorMsg);
+    }
     console.error('Signed URL error:', error.message);
     throw error;
   }

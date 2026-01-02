@@ -48,6 +48,41 @@ async function getTrendingAssets(limit = 10, timeRange = '7d') {
       timeFilter = '';
     }
 
+    // Build WHERE clause with time filter and fake asset exclusion
+    let whereClause = '';
+    const conditions = [];
+    
+    if (timeFilter) {
+      // Extract the condition from "WHERE ..." format
+      const timeCondition = timeFilter.replace('WHERE ', '');
+      conditions.push(`ast.${timeCondition}`);
+    }
+    
+    // Exclude fake/mock assets
+    conditions.push(`(ai.name IS NULL OR (
+      ai.name !~* 'Tech Company \\d+'
+      AND ai.name !~* 'Finance Company \\d+'
+      AND ai.name !~* 'Healthcare Company \\d+'
+      AND ai.name !~* 'Consumer Company \\d+'
+      AND ai.name !~* 'Industrial Company \\d+'
+      AND ai.name !~* 'Energy Company \\d+'
+      AND ai.name !~* '^ETF \\d+'
+      AND ai.name !~* '^CRYPTO\\d+'
+      AND ai.name !~* '^AI \\d+ Inc\\.?$'
+      AND ai.name !~* '^AI\\d+$'
+      AND ai.name !~* '^AA\\d+$'
+      AND (ai.symbol IS NULL OR (
+        ai.symbol !~* '^FN[A-Z]\\d+$'
+        AND ai.symbol !~* '^HC[A-Z]\\d+$'
+        AND ai.symbol !~* '^CS[A-Z]\\d+$'
+        AND ai.symbol !~* '^IN[A-Z]\\d+$'
+        AND ai.symbol !~* '^EN[A-Z]\\d+$'
+        AND ai.symbol !~* '^ETF[A-Z]\\d+$'
+      ))
+    ))`);
+    
+    whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    
     const query = `
       SELECT 
         ast.symbol,
@@ -75,7 +110,7 @@ async function getTrendingAssets(limit = 10, timeRange = '7d') {
         ), 0) as previous_price
       FROM asset_search_tracking ast
       LEFT JOIN asset_info ai ON ast.symbol = ai.symbol
-      ${timeFilter}
+      ${whereClause}
       ORDER BY ast.search_count DESC, ast.last_searched_at DESC
       LIMIT $1
     `;

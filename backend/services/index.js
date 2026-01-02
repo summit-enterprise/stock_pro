@@ -16,6 +16,17 @@ const USE_MOCK_SERVICES = process.env.USE_MOCK_SERVICES === 'true' ||
 
 // Service loader function
 function loadService(servicePath) {
+  // These services always use real implementations (no mock mode)
+  const alwaysRealServices = [
+    'general/imageService',
+    'infrastructure/storageService',
+    'infrastructure/googleCloudService',
+  ];
+  
+  if (alwaysRealServices.includes(servicePath)) {
+    return require(`./${servicePath}`);
+  }
+  
   if (USE_MOCK_SERVICES) {
     // Try to load from mockservices first
     try {
@@ -62,6 +73,8 @@ const dividendService = loadService('stocks/dividendService');
 const filingsService = loadService('stocks/filingsService');
 const ratingsService = loadService('stocks/ratingsService');
 const analystRatingsService = loadService('stocks/analystRatingsService');
+const stockDataService = require('./stocks/stockDataService');
+const stockDataServiceBackfill = require('./stocks/stockDataServiceBackfill');
 
 // ============================================================================
 // Crypto-Specific Services
@@ -97,6 +110,8 @@ module.exports = {
   filingsService,
   ratingsService,
   analystRatingsService,
+  stockDataService,
+  stockDataServiceBackfill,
   
   // Crypto
   cryptoService,
@@ -106,6 +121,14 @@ module.exports = {
   // Utils
   assetGenerator,
   mockData,
+  
+  // ETL Services (Historical Batch Processing)
+  dataIngestionService: require('./etl/dataIngestionService'),
+  schedulerService: require('./etl/schedulerService'),
+  
+  // Real-Time Data Services (Live Data Updates)
+  realtimeDataService: require('./realtime/realtimeDataService'),
+  realtimeSchedulerService: require('./realtime/realtimeSchedulerService'),
   
   // Service loader
   loadService,

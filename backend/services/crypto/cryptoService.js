@@ -137,23 +137,32 @@ async function storeCryptoAssets(cryptos) {
           [symbol]
         );
         
+        // Extract ticker symbol (e.g., "X:BTCUSD" -> "BTC")
+        const { extractTickerSymbol, generateDisplayName } = require('../../utils/assetSymbolUtils');
+        const tickerSymbol = extractTickerSymbol(symbol);
+        const displayName = generateDisplayName(symbol, crypto.name);
+        
         if (existing.rows.length > 0) {
           // Update existing
           await pool.query(
             `UPDATE asset_info 
-             SET name = $1, type = 'crypto', market_cap = $2, updated_at = CURRENT_TIMESTAMP,
-                 logo_url = COALESCE(logo_url, $3)
-             WHERE symbol = $4`,
-            [crypto.name, crypto.marketCap, crypto.image, symbol]
+             SET name = $1, 
+                 ticker_symbol = $2,
+                 display_name = $3,
+                 type = 'crypto', 
+                 market_cap = $4, 
+                 updated_at = CURRENT_TIMESTAMP,
+                 logo_url = COALESCE(logo_url, $5)
+             WHERE symbol = $6`,
+            [crypto.name, tickerSymbol, displayName, crypto.marketCap, crypto.image, symbol]
           );
           updated++;
         } else {
-          // Insert new - store coin ID in a metadata field or separate table
-          // For now, we'll store it in a JSONB column if available, or we can create a mapping table
+          // Insert new
           await pool.query(
-            `INSERT INTO asset_info (symbol, name, type, exchange, currency, market_cap, logo_url, updated_at)
-             VALUES ($1, $2, 'crypto', 'CoinGecko', 'USD', $3, $4, CURRENT_TIMESTAMP)`,
-            [symbol, crypto.name, crypto.marketCap, crypto.image]
+            `INSERT INTO asset_info (symbol, name, ticker_symbol, display_name, type, exchange, currency, market_cap, logo_url, updated_at)
+             VALUES ($1, $2, $3, $4, 'crypto', 'CoinGecko', 'USD', $5, $6, CURRENT_TIMESTAMP)`,
+            [symbol, crypto.name, tickerSymbol, displayName, crypto.marketCap, crypto.image]
           );
           inserted++;
         }

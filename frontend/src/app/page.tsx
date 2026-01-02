@@ -1,4 +1,53 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+
 export default function Home() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // Check if user is logged in
+    const token = localStorage.getItem('token');
+    const userData = localStorage.getItem('user');
+
+    if (token && userData) {
+      try {
+        const user = JSON.parse(userData);
+        
+        // Check if user is banned/restricted - redirect to restricted page
+        if (user.is_banned || user.is_restricted) {
+          router.replace('/restricted');
+          return;
+        }
+        
+        // Redirect admins to admin panel, regular users to dashboard
+        if (user.is_admin || user.is_superuser) {
+          router.replace('/admin');
+        } else {
+          router.replace('/dashboard');
+        }
+        return;
+      } catch (error) {
+        // If parsing fails, continue to show landing page
+        console.error('Error parsing user data:', error);
+      }
+    }
+    
+    // User is not logged in, show landing page
+    setLoading(false);
+  }, [router]);
+
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-black">
+        <div className="text-gray-500 dark:text-gray-400">Loading...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-white dark:bg-black">
       {/* Hero Section */}

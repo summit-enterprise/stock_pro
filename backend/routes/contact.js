@@ -3,6 +3,207 @@ const router = express.Router();
 const { pool } = require('../db');
 const { verifyToken, requireAdmin } = require('../middleware/auth');
 
+// Get user's own contact messages
+router.get('/messages', verifyToken, async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { status, limit = 50, offset = 0 } = req.query;
+
+    let query = `
+      SELECT 
+        id, name, email, subject, message, status,
+        created_at, updated_at
+      FROM contact_messages
+      WHERE user_id = $1
+    `;
+    const params = [userId];
+    let paramIndex = 2;
+
+    if (status) {
+      query += ` AND status = $${paramIndex}`;
+      params.push(status);
+      paramIndex++;
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await pool.query(query, params);
+
+    res.json({
+      messages: result.rows,
+      total: result.rows.length,
+    });
+  } catch (error) {
+    console.error('Error fetching contact messages:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Get a specific contact message
+router.get('/messages/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    const result = await pool.query(
+      `SELECT 
+        id, name, email, subject, message, status,
+        created_at, updated_at
+      FROM contact_messages
+      WHERE id = $1 AND user_id = $2`,
+      [id, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    res.json({ message: result.rows[0] });
+  } catch (error) {
+    console.error('Error fetching contact message:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Get contact message replies (for regular users)
+router.get('/messages/:id/replies', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // First verify the message belongs to the user
+    const messageResult = await pool.query(
+      'SELECT id FROM contact_messages WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    if (messageResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    // Get all replies for this message
+    const result = await pool.query(
+      `SELECT 
+        cr.id,
+        cr.contact_message_id,
+        cr.user_id,
+        cr.is_admin,
+        cr.message,
+        cr.created_at,
+        u.email as user_email,
+        u.name as user_name
+      FROM contact_replies cr
+      LEFT JOIN users u ON cr.user_id = u.id
+      WHERE cr.contact_message_id = $1
+      ORDER BY cr.created_at ASC`,
+      [id]
+    );
+
+    res.json({ replies: result.rows });
+  } catch (error) {
+    console.error('Error fetching contact message replies:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// User: Add reply to their own contact message
+router.post('/messages/:id/replies', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+    const userId = req.userId;
+
+    if (!message || message.trim().length === 0) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    // Verify message exists and belongs to the user
+    const messageResult = await pool.query(
+      'SELECT id FROM contact_messages WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    if (messageResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    // Add reply (user replies are not marked as admin)
+    const replyResult = await pool.query(
+      `INSERT INTO contact_replies (contact_message_id, user_id, is_admin, message)
+       VALUES ($1, $2, FALSE, $3)
+       RETURNING *`,
+      [id, userId, message.trim()]
+    );
+
+    // Update message updated_at timestamp and set status to replied if it was new/read
+    await pool.query(
+      `UPDATE contact_messages 
+       SET updated_at = CURRENT_TIMESTAMP, 
+           status = CASE WHEN status IN ('new', 'read') THEN 'replied' ELSE status END
+       WHERE id = $1`,
+      [id]
+    );
+
+    // Get reply with user info
+    const fullReplyResult = await pool.query(
+      `SELECT 
+        cr.id,
+        cr.contact_message_id,
+        cr.user_id,
+        cr.is_admin,
+        cr.message,
+        cr.created_at,
+        u.email as user_email,
+        u.name as user_name
+      FROM contact_replies cr
+      LEFT JOIN users u ON cr.user_id = u.id
+      WHERE cr.id = $1`,
+      [replyResult.rows[0].id]
+    );
+
+    res.status(201).json({ reply: fullReplyResult.rows[0] });
+  } catch (error) {
+    console.error('Error adding contact message reply:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// User: Archive their own contact message (mark as completed/not needed)
+router.patch('/messages/:id/archive', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // Verify message exists and belongs to the user
+    const messageResult = await pool.query(
+      'SELECT id FROM contact_messages WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    if (messageResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    // Update message status to archived
+    const result = await pool.query(
+      `UPDATE contact_messages 
+       SET status = 'archived', updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $1 AND user_id = $2
+       RETURNING id, subject, status`,
+      [id, userId]
+    );
+
+    res.json({
+      message: 'Message archived successfully',
+      contactMessage: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error archiving contact message:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
 // Submit contact form
 router.post('/', async (req, res) => {
   try {

@@ -39,11 +39,16 @@ export async function GET(
     // Get the image buffer
     const imageBuffer = await response.arrayBuffer();
     
+    // Get content type from response or default to format
+    const contentType = response.headers.get('Content-Type') || `image/${format}`;
+    
     // Return the image with appropriate headers
+    // Use long cache for avatars (they're immutable)
     return new NextResponse(imageBuffer, {
       headers: {
-        'Content-Type': `image/${format}`,
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Content-Type': contentType,
+        'Cache-Control': 'public, max-age=31536000, immutable', // Cache for 1 year
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (error) {

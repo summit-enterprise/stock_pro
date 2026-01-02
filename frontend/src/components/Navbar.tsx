@@ -17,6 +17,7 @@ export default function Navbar() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [avatarError, setAvatarError] = useState(false);
 
   useEffect(() => {
     // Check if user is logged in (regular user or admin)
@@ -162,13 +163,14 @@ export default function Navbar() {
                         href="/account"
                         className="flex items-center gap-2 hover:opacity-80 transition-opacity"
                       >
-                        {user.avatar_url ? (
+                        {user.avatar_url && !avatarError ? (
                           <Image
                             src={normalizeAvatarUrl(user.avatar_url) || ''}
                             alt="Avatar"
                             width={32}
                             height={32}
                             className="rounded-full object-cover border border-gray-300 dark:border-zinc-700 cursor-pointer"
+                            onError={() => setAvatarError(true)}
                           />
                         ) : (
                           <div className="w-8 h-8 rounded-full bg-gray-300 dark:bg-zinc-700 flex items-center justify-center cursor-pointer">

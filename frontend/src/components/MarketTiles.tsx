@@ -32,6 +32,20 @@ export default function MarketTiles({ selectedSymbol, onTileSelect }: MarketTile
   }, []);
 
   const fetchMarketData = async () => {
+    // Check if user is banned/restricted before fetching
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      try {
+        const parsedUser = JSON.parse(userData);
+        if (parsedUser.is_banned || parsedUser.is_restricted) {
+          setLoading(false);
+          return; // Don't fetch data for banned/restricted users
+        }
+      } catch (e) {
+        // Continue if parsing fails
+      }
+    }
+
     try {
       const token = localStorage.getItem('token');
       const response = await fetch('http://localhost:3001/api/market/overview', {
@@ -39,6 +53,13 @@ export default function MarketTiles({ selectedSymbol, onTileSelect }: MarketTile
           'Authorization': token ? `Bearer ${token}` : '',
         },
       });
+      
+      if (response.status === 403) {
+        // User is banned/restricted, don't process response
+        setLoading(false);
+        return;
+      }
+      
       if (response.ok) {
         const data = await response.json();
         setTiles(data.tiles || []);

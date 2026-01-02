@@ -10,6 +10,7 @@ const { pool, initDb } = require('../db');
 const { generateHistoricalData, BASE_PRICES } = require('../services/utils/mockData');
 const cryptoService = require('../services/crypto/cryptoService');
 const { determineCategory, normalizeCategory } = require('../utils/categoryUtils');
+const { extractTickerSymbol, generateDisplayName } = require('../utils/assetSymbolUtils');
 
 // Major indices from market overview
 const MAJOR_INDICES = [
@@ -26,6 +27,50 @@ const MAJOR_INDICES = [
 const COMMODITIES = [
   { symbol: 'XAUUSD', name: 'Gold', basePrice: 2345.00, type: 'commodity' },
   { symbol: 'XAGUSD', name: 'Silver', basePrice: 28.50, type: 'commodity' },
+];
+
+// Major ETFs
+const MAJOR_ETFS = [
+  { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', basePrice: 450.00, type: 'etf' },
+  { symbol: 'QQQ', name: 'Invesco QQQ Trust', basePrice: 380.00, type: 'etf' },
+  { symbol: 'DIA', name: 'SPDR Dow Jones Industrial Average ETF', basePrice: 380.00, type: 'etf' },
+  { symbol: 'IWM', name: 'iShares Russell 2000 ETF', basePrice: 200.00, type: 'etf' },
+  { symbol: 'VTI', name: 'Vanguard Total Stock Market ETF', basePrice: 240.00, type: 'etf' },
+  { symbol: 'VOO', name: 'Vanguard S&P 500 ETF', basePrice: 450.00, type: 'etf' },
+  { symbol: 'VEA', name: 'Vanguard FTSE Developed Markets ETF', basePrice: 50.00, type: 'etf' },
+  { symbol: 'VWO', name: 'Vanguard FTSE Emerging Markets ETF', basePrice: 45.00, type: 'etf' },
+  { symbol: 'AGG', name: 'iShares Core U.S. Aggregate Bond ETF', basePrice: 100.00, type: 'etf' },
+  { symbol: 'BND', name: 'Vanguard Total Bond Market ETF', basePrice: 80.00, type: 'etf' },
+  { symbol: 'TLT', name: 'iShares 20+ Year Treasury Bond ETF', basePrice: 95.00, type: 'etf' },
+  { symbol: 'IEF', name: 'iShares 7-10 Year Treasury Bond ETF', basePrice: 105.00, type: 'etf' },
+  { symbol: 'SHY', name: 'iShares 1-3 Year Treasury Bond ETF', basePrice: 82.00, type: 'etf' },
+  { symbol: 'LQD', name: 'iShares iBoxx $ Investment Grade Corporate Bond ETF', basePrice: 120.00, type: 'etf' },
+  { symbol: 'HYG', name: 'iShares iBoxx $ High Yield Corporate Bond ETF', basePrice: 75.00, type: 'etf' },
+  { symbol: 'JNK', name: 'SPDR Bloomberg High Yield Bond ETF', basePrice: 100.00, type: 'etf' },
+  { symbol: 'EMB', name: 'iShares J.P. Morgan USD Emerging Markets Bond ETF', basePrice: 90.00, type: 'etf' },
+  { symbol: 'TIP', name: 'iShares TIPS Bond ETF', basePrice: 110.00, type: 'etf' },
+  { symbol: 'XLK', name: 'Technology Select Sector SPDR Fund', basePrice: 200.00, type: 'etf' },
+  { symbol: 'XLF', name: 'Financial Select Sector SPDR Fund', basePrice: 40.00, type: 'etf' },
+  { symbol: 'XLV', name: 'Health Care Select Sector SPDR Fund', basePrice: 150.00, type: 'etf' },
+  { symbol: 'XLE', name: 'Energy Select Sector SPDR Fund', basePrice: 85.00, type: 'etf' },
+  { symbol: 'XLI', name: 'Industrial Select Sector SPDR Fund', basePrice: 120.00, type: 'etf' },
+  { symbol: 'XLP', name: 'Consumer Staples Select Sector SPDR Fund', basePrice: 75.00, type: 'etf' },
+  { symbol: 'XLY', name: 'Consumer Discretionary Select Sector SPDR Fund', basePrice: 180.00, type: 'etf' },
+  { symbol: 'XLB', name: 'Materials Select Sector SPDR Fund', basePrice: 80.00, type: 'etf' },
+  { symbol: 'XLU', name: 'Utilities Select Sector SPDR Fund', basePrice: 65.00, type: 'etf' },
+  { symbol: 'XLRE', name: 'Real Estate Select Sector SPDR Fund', basePrice: 45.00, type: 'etf' },
+  { symbol: 'XLC', name: 'Communication Services Select Sector SPDR Fund', basePrice: 70.00, type: 'etf' },
+  { symbol: 'GLD', name: 'SPDR Gold Trust', basePrice: 200.00, type: 'etf' },
+  { symbol: 'SLV', name: 'iShares Silver Trust', basePrice: 22.00, type: 'etf' },
+  { symbol: 'GDX', name: 'VanEck Gold Miners ETF', basePrice: 30.00, type: 'etf' },
+  { symbol: 'GDXJ', name: 'VanEck Junior Gold Miners ETF', basePrice: 40.00, type: 'etf' },
+  { symbol: 'SIL', name: 'Global X Silver Miners ETF', basePrice: 25.00, type: 'etf' },
+  { symbol: 'EWJ', name: 'iShares MSCI Japan ETF', basePrice: 70.00, type: 'etf' },
+  { symbol: 'EWU', name: 'iShares MSCI United Kingdom ETF', basePrice: 35.00, type: 'etf' },
+  { symbol: 'EWC', name: 'iShares MSCI Canada ETF', basePrice: 35.00, type: 'etf' },
+  { symbol: 'EWG', name: 'iShares MSCI Germany ETF', basePrice: 30.00, type: 'etf' },
+  { symbol: 'EWA', name: 'iShares MSCI Australia ETF', basePrice: 25.00, type: 'etf' },
+  { symbol: 'EWZ', name: 'iShares MSCI Brazil ETF', basePrice: 28.00, type: 'etf' },
 ];
 
 // Comprehensive list of major stocks (2000 stocks)
@@ -126,6 +171,7 @@ async function populateStocksIndicesCrypto() {
     console.log('📊 This will populate:');
     console.log('   - 2000 stocks');
     console.log('   - 7 major indices');
+    console.log('   - 40+ major ETFs');
     console.log('   - 100 cryptocurrencies');
     console.log('   - 2 commodities');
     console.log('   - 3 years of historical data\n');
@@ -145,8 +191,17 @@ async function populateStocksIndicesCrypto() {
     }
     console.log(`   ✅ Added ${MAJOR_INDICES.length} indices\n`);
 
-    // 2. Add commodities
-    console.log('2. Adding commodities...');
+    // 2. Add major ETFs
+    console.log('2. Adding major ETFs...');
+    for (const etf of MAJOR_ETFS) {
+      const category = normalizeCategory(determineCategory(etf.symbol, etf.type));
+      allAssets.push({ ...etf, category });
+      BASE_PRICES[etf.symbol] = etf.basePrice;
+    }
+    console.log(`   ✅ Added ${MAJOR_ETFS.length} ETFs\n`);
+
+    // 3. Add commodities
+    console.log('3. Adding commodities...');
     for (const commodity of COMMODITIES) {
       const category = normalizeCategory(determineCategory(commodity.symbol, commodity.type));
       allAssets.push({ ...commodity, category });
@@ -154,8 +209,8 @@ async function populateStocksIndicesCrypto() {
     }
     console.log(`   ✅ Added ${COMMODITIES.length} commodities\n`);
 
-    // 3. Fetch and add cryptocurrencies (top 100)
-    console.log('3. Fetching cryptocurrencies from CoinGecko...');
+    // 4. Fetch and add cryptocurrencies (top 100)
+    console.log('4. Fetching cryptocurrencies from CoinGecko...');
     try {
       const cryptos = await cryptoService.fetchCryptoList(100);
       console.log(`   ✅ Fetched ${cryptos.length} cryptocurrencies`);
@@ -199,8 +254,8 @@ async function populateStocksIndicesCrypto() {
       }
     }
 
-    // 4. Add 2000 stocks
-    console.log('4. Generating 2000 stock symbols...');
+    // 5. Add 2000 stocks
+    console.log('5. Generating 2000 stock symbols...');
     const stocks = getMajorStocks();
     console.log(`   ✅ Generated ${stocks.length} stocks\n`);
     
@@ -212,17 +267,22 @@ async function populateStocksIndicesCrypto() {
       }
     }
 
-    // 5. Insert all assets into asset_info
-    console.log('5. Inserting asset metadata into database...');
+    // 6. Insert all assets into asset_info
+    console.log('6. Inserting asset metadata into database...');
     let insertedCount = 0;
     for (const asset of allAssets) {
       try {
         const category = normalizeCategory(determineCategory(asset.symbol, asset.type, asset.exchange));
+        const tickerSymbol = extractTickerSymbol(asset.symbol);
+        const displayName = generateDisplayName(asset.symbol, asset.name);
+        
         await pool.query(
-          `INSERT INTO asset_info (symbol, name, type, category, exchange, currency, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+          `INSERT INTO asset_info (symbol, name, ticker_symbol, display_name, type, category, exchange, currency, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
            ON CONFLICT (symbol) DO UPDATE SET
            name = EXCLUDED.name,
+           ticker_symbol = EXCLUDED.ticker_symbol,
+           display_name = EXCLUDED.display_name,
            type = EXCLUDED.type,
            category = EXCLUDED.category,
            exchange = EXCLUDED.exchange,
@@ -231,6 +291,8 @@ async function populateStocksIndicesCrypto() {
           [
             asset.symbol,
             asset.name,
+            tickerSymbol,
+            displayName,
             asset.type,
             category,
             asset.exchange || 'NYSE',
@@ -247,8 +309,8 @@ async function populateStocksIndicesCrypto() {
     }
     console.log(`\n   ✅ Inserted ${insertedCount} assets\n`);
 
-    // 6. Generate and insert 3 years of historical data
-    console.log('6. Generating 3 years of historical data...');
+    // 7. Generate and insert 3 years of historical data
+    console.log('7. Generating 3 years of historical data...');
     console.log(`   This will create ${(allAssets.length * tradingDays).toLocaleString()} data points\n`);
     
     let dataInserted = 0;
@@ -307,7 +369,7 @@ async function populateStocksIndicesCrypto() {
     
     console.log(`\n   ✅ Inserted ${dataInserted.toLocaleString()} historical data points\n`);
 
-    // 7. Summary
+    // 8. Summary
     console.log('='.repeat(60));
     console.log('📊 POPULATION SUMMARY');
     console.log('='.repeat(60));
@@ -316,12 +378,14 @@ async function populateStocksIndicesCrypto() {
     const dataCount = await pool.query('SELECT COUNT(*) FROM asset_data');
     const stocksCount = await pool.query("SELECT COUNT(*) FROM asset_info WHERE type = 'stock'");
     const indicesCount = await pool.query("SELECT COUNT(*) FROM asset_info WHERE type = 'index'");
+    const etfsCount = await pool.query("SELECT COUNT(*) FROM asset_info WHERE type = 'etf' OR category = 'ETF'");
     const cryptosCount = await pool.query("SELECT COUNT(*) FROM asset_info WHERE type = 'crypto'");
     const commoditiesCount = await pool.query("SELECT COUNT(*) FROM asset_info WHERE type = 'commodity'");
     
     console.log(`Total Assets: ${assetCount.rows[0].count}`);
     console.log(`  - Stocks: ${stocksCount.rows[0].count}`);
     console.log(`  - Indices: ${indicesCount.rows[0].count}`);
+    console.log(`  - ETFs: ${etfsCount.rows[0].count}`);
     console.log(`  - Cryptocurrencies: ${cryptosCount.rows[0].count}`);
     console.log(`  - Commodities: ${commoditiesCount.rows[0].count}`);
     console.log(`Historical Data Points: ${dataCount.rows[0].count.toLocaleString()}`);

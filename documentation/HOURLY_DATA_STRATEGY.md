@@ -139,3 +139,5 @@ Create a service that periodically syncs hourly data:
 ## Recommended Approach: Hybrid (DB + Redis)
 ✅ **Best balance:** Fast access (Redis) + Historical persistence (DB) + Cost efficiency
 
+
+

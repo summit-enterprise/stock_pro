@@ -49,6 +49,20 @@ app.use(express.json());
         rssNewsService.startNewsService(2.5); // Refresh every 2.5 hours
       }
       
+      // ETL Scheduler Service - Historical batch processing (only in production or if explicitly enabled)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_ETL_SCHEDULER === 'true') {
+        const etlSchedulerService = require('./services/etl/schedulerService');
+        etlSchedulerService.start();
+        console.log('✅ ETL Scheduler Service started (historical batch processing)');
+      }
+      
+      // Real-Time Data Scheduler Service - Live data updates (hourly data + latest prices)
+      if (process.env.NODE_ENV === 'production' || process.env.ENABLE_REALTIME_SCHEDULER === 'true') {
+        const realtimeSchedulerService = require('./services/realtime/realtimeSchedulerService');
+        realtimeSchedulerService.start();
+        console.log('✅ Real-Time Data Scheduler Service started (hourly data + latest prices)');
+      }
+      
       // Ratings Service
       const ratingsService = require('./services/stocks/ratingsService');
       if (ratingsService.startRatingsService) {
@@ -86,6 +100,8 @@ const supportRoutes = require('./routes/support');
 const contactRoutes = require('./routes/contact');
 const filingsRoutes = require('./routes/filings');
 const cryptoRoutes = require('./routes/crypto');
+const stocksRoutes = require('./routes/equities'); // Note: file is still named equities.js but serves stocks
+const etfsRoutes = require('./routes/etfs');
 const imageRoutes = require('./routes/image');
 
 // Register routes
@@ -111,6 +127,8 @@ app.use('/api/support', supportRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/filings', filingsRoutes);
 app.use('/api/crypto', cryptoRoutes);
+app.use('/api/stocks', stocksRoutes);
+app.use('/api/etfs', etfsRoutes);
 app.use('/api/image', imageRoutes);
 
 // Redis client is now initialized via initRedis() above

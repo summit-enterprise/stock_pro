@@ -34,6 +34,20 @@ export default function PortfolioSummary() {
   }, []);
 
   const fetchPortfolio = async () => {
+    // Check if user is banned/restricted before fetching
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      try {
+        const parsedUser = JSON.parse(userData);
+        if (parsedUser.is_banned || parsedUser.is_restricted) {
+          setLoading(false);
+          return; // Don't fetch data for banned/restricted users
+        }
+      } catch (e) {
+        // Continue if parsing fails
+      }
+    }
+
     try {
       const token = localStorage.getItem('token');
       if (!token) {
@@ -46,6 +60,12 @@ export default function PortfolioSummary() {
           'Authorization': `Bearer ${token}`,
         },
       });
+
+      if (response.status === 403) {
+        // User is banned/restricted, don't process response
+        setLoading(false);
+        return;
+      }
 
       if (response.ok) {
         const data = await response.json();

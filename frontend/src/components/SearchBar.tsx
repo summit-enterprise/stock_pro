@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 interface SearchResult {
   symbol: string;
   name: string;
+  ticker?: string;
   market: string;
   type: string;
   exchange: string;
@@ -470,7 +471,8 @@ export default function SearchBar() {
                         <div className="flex-1 min-w-0">
                           <div className="text-white font-medium truncate">{search.name}</div>
                           <div className="text-sm text-gray-400">
-                            {getExchangeLabel(search.exchange)}:{search.symbol}
+                            {search.symbol.startsWith('X:') ? search.symbol.replace('X:', '').replace('USD', '') : search.symbol}
+                            {search.exchange && ` • ${getExchangeLabel(search.exchange)}`}
                           </div>
                         </div>
                       </div>
@@ -556,7 +558,8 @@ export default function SearchBar() {
                     <div className="flex-1 min-w-0">
                       <div className="text-white font-medium truncate">{result.name}</div>
                       <div className="text-sm text-gray-400">
-                        {getExchangeLabel(result.exchange)}:{result.symbol}
+                        {result.ticker || (result.symbol.startsWith('X:') ? result.symbol.replace('X:', '').replace('USD', '') : result.symbol)}
+                        {result.exchange && ` • ${getExchangeLabel(result.exchange)}`}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

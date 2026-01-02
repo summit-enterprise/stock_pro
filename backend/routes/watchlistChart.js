@@ -41,7 +41,7 @@ router.get('/:symbol', async (req, res) => {
     }
 
     // Validate timeRange
-    const validTimeRanges = ['1D', '5D', '1W', '1M', '3M', '6M', '1Y', '3Y', '5Y', '10Y', 'MAX'];
+    const validTimeRanges = ['1D', '7D', '1M', '3M', '6M', 'YTD', '3Y', '5Y', 'MAX'];
     if (timeRange && !validTimeRanges.includes(timeRange)) {
       return res.status(400).json({ 
         error: `Invalid timeRange. Must be one of: ${validTimeRanges.join(', ')}`,
@@ -80,53 +80,153 @@ router.get('/:symbol', async (req, res) => {
         });
       }
     } else {
-      // Use time range
-      const daysMap = {
-        '1D': 1,
-        '5D': 5,
-        '1W': 7,
-        '1M': 30,
-        '3M': 90,
-        '6M': 180,
-        '1Y': 365,
-        '3Y': 1095,
-        '5Y': 1825,
-        '10Y': 3650,
-        'MAX': 3650, // Max 10 years for now
-      };
-      const days = daysMap[timeRange] || 365;
-      startDate.setDate(startDate.getDate() - days);
+      // Use time range - calculate accurate dates (all ranges include TODAY)
+      if (timeRange === '1D') {
+        // TODAY: 12am-11pm
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === '7D') {
+        // Today + 6 previous days (7 days total including today)
+        startDate.setDate(startDate.getDate() - 6);
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === '1M') {
+        // Exactly 1 month ago to today
+        startDate.setMonth(startDate.getMonth() - 1);
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === '3M') {
+        // Exactly 3 months ago to today
+        startDate.setMonth(startDate.getMonth() - 3);
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === '6M') {
+        // Exactly 6 months ago to today
+        startDate.setMonth(startDate.getMonth() - 6);
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === 'YTD') {
+        // Year to date: January 1st of current year to today
+        startDate.setFullYear(startDate.getFullYear(), 0, 1);
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === '3Y') {
+        // Exactly 3 years ago to today
+        startDate.setFullYear(startDate.getFullYear() - 3);
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === '5Y') {
+        // Exactly 5 years ago to today
+        startDate.setFullYear(startDate.getFullYear() - 5);
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeRange === 'MAX') {
+        // Start from 2010 to today
+        startDate.setFullYear(2010, 0, 1);
+        startDate.setHours(0, 0, 0, 0);
+      } else {
+        // Default to 1 month
+        startDate.setMonth(startDate.getMonth() - 1);
+        startDate.setHours(0, 0, 0, 0);
+      }
     }
 
     // Format dates for SQL query
     const startDateStr = startDate.toISOString().split('T')[0];
     const endDateStr = endDate.toISOString().split('T')[0];
+    const startTimestamp = startDate.toISOString();
 
-    // Get historical price data for the symbol
-    // Note: asset_data table only has: symbol, date, open, high, low, close, volume, adjusted_close
-    // It does NOT have change or change_percent columns
+    // Determine if we need hourly data (for 1D and 7D ranges)
+    const needsHourlyData = timeRange === '1D' || timeRange === '7D';
+
+    // Check Redis cache first
+    const { getRedisClient } = require('../config/redis');
+    const redisClient = await getRedisClient();
+    const cacheKey = `watchlist_chart:${symbol}:${timeRange}`;
+    const CACHE_TTL = needsHourlyData ? 2 * 60 : (timeRange === 'MAX' ? 60 * 60 : 5 * 60); // 2 min for hourly, 1 hour for MAX, 5 min for others
+    
     let historicalDataResult;
-    try {
-      historicalDataResult = await pool.query(
-        `SELECT date, open, high, low, close, volume, adjusted_close
-         FROM asset_data 
-         WHERE symbol = $1 
-           AND date >= $2 
-           AND date <= $3 
-         ORDER BY date ASC`,
-        [symbol, startDateStr, endDateStr]
-      );
-    } catch (dbError) {
-      console.error(`Database error for symbol ${symbol}:`, dbError);
-      throw new Error(`Database query failed: ${dbError.message}`);
+    let cacheHit = false;
+
+    if (redisClient && redisClient.isOpen) {
+      try {
+        const cachedData = await redisClient.get(cacheKey);
+        if (cachedData) {
+          const parsed = JSON.parse(cachedData);
+          historicalDataResult = { rows: parsed };
+          cacheHit = true;
+          console.log(`Watchlist chart cache hit for ${symbol} (${timeRange})`);
+        }
+      } catch (redisError) {
+        console.warn('Redis cache read failed for watchlist chart, continuing...');
+      }
+    }
+
+    // If cache miss, fetch from database
+    if (!cacheHit) {
+      try {
+        // Check if timestamp column exists
+        const columnCheck = await pool.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'asset_data' 
+            AND column_name = 'timestamp';
+        `);
+        const hasTimestampColumn = columnCheck.rows.length > 0;
+
+        if (needsHourlyData && hasTimestampColumn) {
+          // Fetch hourly data for 1D and 7D ranges
+          historicalDataResult = await pool.query(
+            `SELECT date, timestamp, open, high, low, close, volume, adjusted_close
+             FROM asset_data 
+             WHERE symbol = $1 
+               AND date >= $2 
+               AND date <= $3
+               AND (timestamp IS NOT NULL OR timestamp >= $4::timestamp)
+             ORDER BY COALESCE(timestamp, date::timestamp) ASC`,
+            [symbol, startDateStr, endDateStr, startTimestamp]
+          );
+        } else if (hasTimestampColumn) {
+          // Fetch daily data only (timestamp IS NULL for daily records)
+          historicalDataResult = await pool.query(
+            `SELECT date, timestamp, open, high, low, close, volume, adjusted_close
+             FROM asset_data 
+             WHERE symbol = $1 
+               AND date >= $2 
+               AND date <= $3 
+               AND timestamp IS NULL
+             ORDER BY date ASC`,
+            [symbol, startDateStr, endDateStr]
+          );
+        } else {
+          // Fallback: timestamp column doesn't exist, fetch all data
+          historicalDataResult = await pool.query(
+            `SELECT date, open, high, low, close, volume, adjusted_close
+             FROM asset_data 
+             WHERE symbol = $1 
+               AND date >= $2 
+               AND date <= $3 
+             ORDER BY date ASC`,
+            [symbol, startDateStr, endDateStr]
+          );
+        }
+
+        // Cache in Redis
+        if (redisClient && redisClient.isOpen && historicalDataResult.rows.length > 0) {
+          try {
+            await redisClient.setEx(cacheKey, CACHE_TTL, JSON.stringify(historicalDataResult.rows));
+            console.log(`Watchlist chart cached for ${symbol} (${timeRange}) - ${historicalDataResult.rows.length} points`);
+          } catch (e) {
+            console.warn('Failed to cache watchlist chart data in Redis');
+          }
+        }
+      } catch (dbError) {
+        console.error(`Database error for symbol ${symbol}:`, dbError);
+        throw new Error(`Database query failed: ${dbError.message}`);
+      }
     }
 
     // Format data for chart
-    // Calculate change and changePercent from previous day's close price
+    // Calculate change and changePercent from previous point's close price
     const chartData = historicalDataResult.rows.map((row, index) => {
       try {
+        // Use timestamp if available (hourly data), otherwise use date (daily data)
         let date;
-        if (row.date instanceof Date) {
+        if (row.timestamp) {
+          date = row.timestamp instanceof Date ? row.timestamp : new Date(row.timestamp);
+        } else if (row.date instanceof Date) {
           date = row.date;
         } else if (typeof row.date === 'string') {
           date = new Date(row.date);
@@ -136,7 +236,7 @@ router.get('/:symbol', async (req, res) => {
         
         // Validate date
         if (isNaN(date.getTime())) {
-          console.warn(`Invalid date for symbol ${symbol}:`, row.date);
+          console.warn(`Invalid date for symbol ${symbol}:`, row.date || row.timestamp);
           date = new Date();
         }
 
@@ -150,6 +250,7 @@ router.get('/:symbol', async (req, res) => {
         return {
           date: date.toISOString().split('T')[0],
           dateObj: date,
+          timestamp: date.getTime(),
           open: parseFloat(row.open) || 0,
           high: parseFloat(row.high) || 0,
           low: parseFloat(row.low) || 0,
@@ -165,6 +266,7 @@ router.get('/:symbol', async (req, res) => {
         return {
           date: new Date().toISOString().split('T')[0],
           dateObj: new Date(),
+          timestamp: Date.now(),
           open: 0,
           high: 0,
           low: 0,

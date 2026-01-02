@@ -11,7 +11,9 @@ const fs = require('fs').promises;
 const { createWriteStream } = require('fs');
 const sharp = require('sharp');
 
-const LOGO_BUCKET = process.env.GCP_STORAGE_BUCKET || 'stock-app-assets';
+const { getBucketName } = require('../../utils/bucketConfig');
+
+const LOGO_BUCKET = getBucketName();
 const LOGO_FOLDER = 'logos';
 
 /**
@@ -24,7 +26,16 @@ async function fetchLogoUrl(symbol, assetType, assetName) {
   try {
     // For crypto: Use CoinGecko API
     if (type === 'crypto' || type === 'cryptocurrency') {
-      return await fetchCryptoLogo(normalizedSymbol);
+      // Normalize symbol from name if needed (e.g., "BTCUSD (Crypto)" -> extract "BTCUSD")
+      let cryptoSymbol = normalizedSymbol;
+      if (assetName && assetName.includes('(Crypto)')) {
+        // Extract symbol from name like "BTCUSD (Crypto)" -> "BTCUSD"
+        const nameMatch = assetName.match(/^([A-Z0-9]+USD?)\s*\(/i);
+        if (nameMatch) {
+          cryptoSymbol = nameMatch[1].toUpperCase();
+        }
+      }
+      return await fetchCryptoLogo(cryptoSymbol);
     }
 
     // For stocks/ETFs: Try multiple sources
@@ -328,20 +339,37 @@ async function downloadAndStoreLogo(logoUrl, symbol) {
       finalExt = 'webp';
     }
 
-    // Upload to GCP Storage (make public for direct access)
+    // Upload to GCP Storage as private file (served via signed URLs for fast loading)
     const gcpPath = `${LOGO_FOLDER}/${symbol}.${finalExt}`;
     const finalContentType = finalExt === 'webp' ? 'image/webp' : contentType;
-    const uploadResult = await storageService.uploadFile(finalPath, gcpPath, {
-      bucket: LOGO_BUCKET,
-      contentType: finalContentType,
-      public: true, // Make logos publicly accessible
-      metadata: {
-        symbol: symbol,
-        source: 'logo-service',
-      },
-    });
+    
+    // Read file as buffer for upload
+    const fileBuffer = await fs.readFile(finalPath);
+    
+    const uploadResult = await storageService.uploadFromBuffer(
+      fileBuffer,
+      gcpPath,
+      {
+        bucket: LOGO_BUCKET,
+        contentType: finalContentType,
+        public: false, // Private, served via signed URLs (consistent with avatars)
+        cacheControl: 'public, max-age=31536000, immutable', // Cache for 1 year for fast loading
+        metadata: {
+          symbol: symbol,
+          source: 'logo-service',
+        },
+      }
+    );
 
-    const gcpUrl = uploadResult.publicUrl || `https://storage.googleapis.com/${LOGO_BUCKET}/${gcpPath}`;
+    // Return URL that will be served via authenticated route
+    // Format: /api/image/gcp/logos/{SYMBOL}.webp (relative path for frontend)
+    // Frontend will handle the backend URL prefix via Next.js API route
+    // This path is environment-agnostic - the backend will use the correct bucket based on NODE_ENV
+    const gcpUrl = `/api/image/gcp/${gcpPath}`;
+    
+    const { getCurrentEnvironment } = require('../../utils/bucketConfig');
+    const currentEnv = getCurrentEnvironment();
+    console.log(`✅ Logo uploaded to GCP (${currentEnv}): ${LOGO_BUCKET}/${gcpPath}`);
 
     // Clean up temp files
     try {
@@ -383,15 +411,16 @@ async function getAssetLogo(symbol, assetType, assetName) {
       return null; // No logo found, will use default
     }
 
-    // Try to download and store in GCP
+    // Always download and store in GCP (required for fast loading)
     let finalLogoUrl = null;
     try {
       const gcpUrl = await downloadAndStoreLogo(logoUrl, normalizedSymbol);
       finalLogoUrl = gcpUrl;
     } catch (error) {
-      // If GCP upload fails (e.g., billing disabled), store the original URL
-      console.warn(`GCP upload failed for ${normalizedSymbol}, storing original URL: ${error.message}`);
-      finalLogoUrl = logoUrl; // Use the original URL from the API
+      // If GCP upload fails, log error but still try to store original URL as fallback
+      console.error(`GCP upload failed for ${normalizedSymbol}: ${error.message}`);
+      // Store original URL temporarily, but it should be migrated later
+      finalLogoUrl = logoUrl;
     }
 
     // Update database with logo URL (either GCP URL or original API URL)

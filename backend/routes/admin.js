@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../db');
 const crypto = require('crypto');
 const { sendWelcomeEmail } = require('../services/general/emailService');
+const { batchGetChannelNames } = require('../services/general/youtubeService');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
@@ -177,7 +178,7 @@ router.post('/login', async (req, res) => {
 router.get('/users', requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, email, name, auth_type, is_admin, is_superuser, created_at 
+      `SELECT id, email, name, auth_type, is_admin, is_superuser, is_banned, is_restricted, ban_reason, banned_at, created_at 
        FROM users 
        WHERE is_admin = FALSE 
        ORDER BY created_at DESC`
@@ -194,7 +195,7 @@ router.get('/users', requireAdmin, async (req, res) => {
 router.get('/admins', requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, email, name, auth_type, is_admin, is_superuser, created_at 
+      `SELECT id, email, name, auth_type, is_admin, is_superuser, is_banned, is_restricted, ban_reason, banned_at, created_at 
        FROM users 
        WHERE is_admin = TRUE 
        ORDER BY created_at DESC`
@@ -290,6 +291,210 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Ban/Restrict user
+router.post('/users/:id/ban', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const isSuperuser = req.user.is_superuser;
+
+    // Prevent banning yourself
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (parseInt(id) === decoded.userId) {
+      return res.status(400).json({ error: 'Cannot ban your own account' });
+    }
+
+    // Check if target user exists and get their status
+    const targetUser = await pool.query('SELECT id, is_admin, is_superuser FROM users WHERE id = $1', [id]);
+    if (targetUser.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Regular admins can only ban regular users (non-admins)
+    // Superusers can ban anyone
+    if (!isSuperuser && targetUser.rows[0].is_admin) {
+      return res.status(403).json({ error: 'Only superusers can ban admin accounts' });
+    }
+
+    const result = await pool.query(
+      `UPDATE users 
+       SET is_banned = TRUE, is_restricted = TRUE, ban_reason = $1, banned_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $2 
+       RETURNING id, email, is_banned, is_restricted, ban_reason, banned_at`,
+      [reason || null, id]
+    );
+
+    res.json({
+      message: 'User banned successfully',
+      user: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error banning user:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Unban user
+// NOTE: This only updates the ban status flags. All user data (watchlist, portfolio, tickets, etc.) is preserved.
+router.post('/users/:id/unban', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const isSuperuser = req.user.is_superuser;
+
+    // Check if target user exists and get their status
+    const targetUser = await pool.query('SELECT id, is_admin FROM users WHERE id = $1', [id]);
+    if (targetUser.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Regular admins can only unban regular users (non-admins)
+    // Superusers can unban anyone
+    if (!isSuperuser && targetUser.rows[0].is_admin) {
+      return res.status(403).json({ error: 'Only superusers can unban admin accounts' });
+    }
+
+    // Verify user data exists before unbanning (for logging/debugging)
+    const watchlistCount = await pool.query('SELECT COUNT(*) as count FROM watchlist WHERE user_id = $1', [id]);
+    const portfolioCount = await pool.query('SELECT COUNT(*) as count FROM portfolio WHERE user_id = $1', [id]);
+    console.log(`Unbanning user ${id}: Watchlist items: ${watchlistCount.rows[0].count}, Portfolio items: ${portfolioCount.rows[0].count}`);
+
+    // Only update ban status flags - preserve all user data (watchlist, portfolio, etc.)
+    // This UPDATE statement does NOT trigger CASCADE DELETE - only DELETE statements do
+    const result = await pool.query(
+      `UPDATE users 
+       SET is_banned = FALSE, is_restricted = FALSE, ban_reason = NULL, banned_at = NULL, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $1 
+       RETURNING id, email, is_banned, is_restricted`,
+      [id]
+    );
+
+    // Verify data is still present after unban
+    const watchlistCountAfter = await pool.query('SELECT COUNT(*) as count FROM watchlist WHERE user_id = $1', [id]);
+    const portfolioCountAfter = await pool.query('SELECT COUNT(*) as count FROM portfolio WHERE user_id = $1', [id]);
+    console.log(`After unban user ${id}: Watchlist items: ${watchlistCountAfter.rows[0].count}, Portfolio items: ${portfolioCountAfter.rows[0].count}`);
+
+    if (parseInt(watchlistCountAfter.rows[0].count) !== parseInt(watchlistCount.rows[0].count) || 
+        parseInt(portfolioCountAfter.rows[0].count) !== parseInt(portfolioCount.rows[0].count)) {
+      console.error(`⚠️  WARNING: Data loss detected for user ${id} during unban operation!`);
+    }
+
+    res.json({
+      message: 'User unbanned successfully',
+      user: result.rows[0],
+      dataPreserved: {
+        watchlist: parseInt(watchlistCountAfter.rows[0].count),
+        portfolio: parseInt(portfolioCountAfter.rows[0].count)
+      }
+    });
+  } catch (error) {
+    console.error('Error unbanning user:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Restrict user (less severe than ban - can still access support)
+router.post('/users/:id/restrict', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const isSuperuser = req.user.is_superuser;
+
+    // Prevent restricting yourself
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (parseInt(id) === decoded.userId) {
+      return res.status(400).json({ error: 'Cannot restrict your own account' });
+    }
+
+    // Check if target user exists and get their status
+    const targetUser = await pool.query('SELECT id, is_admin FROM users WHERE id = $1', [id]);
+    if (targetUser.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Regular admins can only restrict regular users (non-admins)
+    // Superusers can restrict anyone
+    if (!isSuperuser && targetUser.rows[0].is_admin) {
+      return res.status(403).json({ error: 'Only superusers can restrict admin accounts' });
+    }
+
+    const result = await pool.query(
+      `UPDATE users 
+       SET is_restricted = TRUE, ban_reason = $1, banned_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $2 
+       RETURNING id, email, is_banned, is_restricted, ban_reason, banned_at`,
+      [reason || null, id]
+    );
+
+    res.json({
+      message: 'User restricted successfully',
+      user: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error restricting user:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Remove restriction from user
+// NOTE: This only updates the restriction status flag. All user data (watchlist, portfolio, tickets, etc.) is preserved.
+router.post('/users/:id/unrestrict', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const isSuperuser = req.user.is_superuser;
+
+    // Check if target user exists and get their status
+    const targetUser = await pool.query('SELECT id, is_admin FROM users WHERE id = $1', [id]);
+    if (targetUser.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Regular admins can only unrestrict regular users (non-admins)
+    // Superusers can unrestrict anyone
+    if (!isSuperuser && targetUser.rows[0].is_admin) {
+      return res.status(403).json({ error: 'Only superusers can unrestrict admin accounts' });
+    }
+
+    // Verify user data exists before unrestricting (for logging/debugging)
+    const watchlistCount = await pool.query('SELECT COUNT(*) as count FROM watchlist WHERE user_id = $1', [id]);
+    const portfolioCount = await pool.query('SELECT COUNT(*) as count FROM portfolio WHERE user_id = $1', [id]);
+    console.log(`Unrestricting user ${id}: Watchlist items: ${watchlistCount.rows[0].count}, Portfolio items: ${portfolioCount.rows[0].count}`);
+
+    // Only update restriction status flag - preserve all user data (watchlist, portfolio, etc.)
+    // This UPDATE statement does NOT trigger CASCADE DELETE - only DELETE statements do
+    const result = await pool.query(
+      `UPDATE users 
+       SET is_restricted = FALSE, ban_reason = NULL, banned_at = NULL, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $1 
+       RETURNING id, email, is_banned, is_restricted`,
+      [id]
+    );
+
+    // Verify data is still present after unrestrict
+    const watchlistCountAfter = await pool.query('SELECT COUNT(*) as count FROM watchlist WHERE user_id = $1', [id]);
+    const portfolioCountAfter = await pool.query('SELECT COUNT(*) as count FROM portfolio WHERE user_id = $1', [id]);
+    console.log(`After unrestrict user ${id}: Watchlist items: ${watchlistCountAfter.rows[0].count}, Portfolio items: ${portfolioCountAfter.rows[0].count}`);
+
+    if (parseInt(watchlistCountAfter.rows[0].count) !== parseInt(watchlistCount.rows[0].count) || 
+        parseInt(portfolioCountAfter.rows[0].count) !== parseInt(portfolioCount.rows[0].count)) {
+      console.error(`⚠️  WARNING: Data loss detected for user ${id} during unrestrict operation!`);
+    }
+
+    res.json({
+      message: 'User restriction removed successfully',
+      user: result.rows[0],
+      dataPreserved: {
+        watchlist: parseInt(watchlistCountAfter.rows[0].count),
+        portfolio: parseInt(portfolioCountAfter.rows[0].count)
+      }
+    });
+  } catch (error) {
+    console.error('Error removing restriction:', error);
     res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });
@@ -630,6 +835,117 @@ router.post('/billing/sync', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('Billing sync error:', error);
     res.status(500).json({ error: 'Failed to sync billing data', message: error.message });
+  }
+});
+
+// YouTube Channels Management Routes
+// Get all YouTube channels
+router.get('/youtube-channels', requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM youtube_channels ORDER BY category, channel_name'
+    );
+    res.json({ channels: result.rows });
+  } catch (error) {
+    console.error('Error fetching YouTube channels:', error);
+    res.status(500).json({ error: 'Failed to fetch YouTube channels', message: error.message });
+  }
+});
+
+// Create or update YouTube channels (bulk)
+router.post('/youtube-channels', requireAdmin, async (req, res) => {
+  try {
+    const { channels } = req.body;
+    
+    if (!Array.isArray(channels)) {
+      return res.status(400).json({ error: 'channels must be an array' });
+    }
+
+    // Fetch channel names from YouTube API for channels that need it
+    const channelIdsToFetch = channels
+      .filter(ch => ch.channel_id && (!ch.channel_name || ch.channel_name === 'Channel'))
+      .map(ch => ch.channel_id);
+    
+    let channelNamesMap = {};
+    if (channelIdsToFetch.length > 0) {
+      try {
+        channelNamesMap = await batchGetChannelNames(channelIdsToFetch);
+        console.log(`Fetched ${Object.keys(channelNamesMap).length} channel names from YouTube`);
+      } catch (error) {
+        console.warn('Error fetching channel names from YouTube:', error.message);
+      }
+    }
+
+    const results = [];
+    
+    for (const channel of channels) {
+      const { channel_id, channel_name, subject, category, content_type, pull_livestreams, is_active } = channel;
+      
+      if (!channel_id || !category || !content_type) {
+        results.push({ 
+          channel_id, 
+          success: false, 
+          error: 'Missing required fields: channel_id, category, content_type' 
+        });
+        continue;
+      }
+
+      // Use fetched channel name if available, otherwise use provided name or fallback
+      const finalChannelName = channelNamesMap[channel_id] || channel_name || 'Channel';
+
+      try {
+        // Check if channel exists
+        const existing = await pool.query(
+          'SELECT id FROM youtube_channels WHERE channel_id = $1',
+          [channel_id]
+        );
+
+        if (existing.rows.length > 0) {
+          // Update existing
+          await pool.query(
+            `UPDATE youtube_channels 
+             SET channel_name = $1, subject = $2, category = $3, content_type = $4, 
+                 pull_livestreams = $5, is_active = $6, updated_at = CURRENT_TIMESTAMP
+             WHERE channel_id = $7`,
+            [finalChannelName, subject || null, category, content_type, pull_livestreams !== false, is_active !== false, channel_id]
+          );
+          results.push({ channel_id, success: true, action: 'updated' });
+        } else {
+          // Insert new
+          await pool.query(
+            `INSERT INTO youtube_channels 
+             (channel_id, channel_name, subject, category, content_type, pull_livestreams, is_active)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [channel_id, finalChannelName, subject || null, category, content_type, pull_livestreams !== false, is_active !== false]
+          );
+          results.push({ channel_id, success: true, action: 'created' });
+        }
+      } catch (error) {
+        console.error(`Error processing channel ${channel_id}:`, error);
+        results.push({ channel_id, success: false, error: error.message });
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      results,
+      message: `Processed ${channels.length} channels` 
+    });
+  } catch (error) {
+    console.error('Error saving YouTube channels:', error);
+    res.status(500).json({ error: 'Failed to save YouTube channels', message: error.message });
+  }
+});
+
+// Delete a YouTube channel
+router.delete('/youtube-channels/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('DELETE FROM youtube_channels WHERE id = $1', [id]);
+    res.json({ success: true, message: 'Channel deleted' });
+  } catch (error) {
+    console.error('Error deleting YouTube channel:', error);
+    res.status(500).json({ error: 'Failed to delete channel', message: error.message });
   }
 });
 

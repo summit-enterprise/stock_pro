@@ -6,6 +6,8 @@ import ApiCallsDashboard from '@/components/ApiCallsDashboard';
 import ServiceHealthDashboard from '@/components/ServiceHealthDashboard';
 import SupportTicketsDashboard from '@/components/SupportTicketsDashboard';
 import ContactMessagesDashboard from '@/components/ContactMessagesDashboard';
+import LiveStreamsDashboard from '@/components/LiveStreamsDashboard';
+import BanRestrictModal from '@/components/BanRestrictModal';
 
 interface User {
   id: number;
@@ -14,6 +16,10 @@ interface User {
   auth_type: string;
   is_admin: boolean;
   is_superuser: boolean;
+  is_banned?: boolean;
+  is_restricted?: boolean;
+  ban_reason?: string | null;
+  banned_at?: string | null;
   created_at: string;
 }
 
@@ -24,13 +30,16 @@ export default function AdminPage() {
   const [user, setUser] = useState<any>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [admins, setAdmins] = useState<User[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'admins' | 'billing' | 'api-calls' | 'services' | 'tickets' | 'contact'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'admins' | 'billing' | 'api-calls' | 'services' | 'tickets' | 'contact' | 'livestreams'>('users');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [formData, setFormData] = useState({ email: '', name: '', password: '', is_admin: false, is_superuser: false });
+  const [showBanRestrictModal, setShowBanRestrictModal] = useState(false);
+  const [banRestrictAction, setBanRestrictAction] = useState<'ban' | 'restrict' | 'unban' | 'unrestrict'>('ban');
+  const [banRestrictUser, setBanRestrictUser] = useState<User | null>(null);
 
   // Check for email parameter in URL
   useEffect(() => {
@@ -203,6 +212,77 @@ export default function AdminPage() {
     }
   };
 
+  const openBanRestrictModal = (user: User, action: 'ban' | 'restrict' | 'unban' | 'unrestrict') => {
+    setBanRestrictUser(user);
+    setBanRestrictAction(action);
+    setShowBanRestrictModal(true);
+  };
+
+  const handleBanRestrictConfirm = async (reason: string) => {
+    if (!banRestrictUser || !token) return;
+
+    try {
+      let endpoint = '';
+      let body: any = {};
+
+      switch (banRestrictAction) {
+        case 'ban':
+          endpoint = `/api/admin/users/${banRestrictUser.id}/ban`;
+          body = { reason: reason || null };
+          break;
+        case 'restrict':
+          endpoint = `/api/admin/users/${banRestrictUser.id}/restrict`;
+          body = { reason: reason || null };
+          break;
+        case 'unban':
+          endpoint = `/api/admin/users/${banRestrictUser.id}/unban`;
+          body = {};
+          break;
+        case 'unrestrict':
+          endpoint = `/api/admin/users/${banRestrictUser.id}/unrestrict`;
+          body = {};
+          break;
+      }
+
+      const response = await fetch(`http://localhost:3001${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: Object.keys(body).length > 0 ? JSON.stringify(body) : undefined
+      });
+
+      if (response.ok) {
+        await loadUsers(token);
+        await loadAdmins(token);
+        setShowBanRestrictModal(false);
+        setBanRestrictUser(null);
+      } else {
+        const data = await response.json();
+        alert(data.error || `Failed to ${banRestrictAction} user`);
+      }
+    } catch (err) {
+      alert(`Failed to ${banRestrictAction} user`);
+    }
+  };
+
+  const handleBanUser = (user: User) => {
+    openBanRestrictModal(user, 'ban');
+  };
+
+  const handleUnbanUser = (user: User) => {
+    openBanRestrictModal(user, 'unban');
+  };
+
+  const handleRestrictUser = (user: User) => {
+    openBanRestrictModal(user, 'restrict');
+  };
+
+  const handleUnrestrictUser = (user: User) => {
+    openBanRestrictModal(user, 'unrestrict');
+  };
+
   const handleDeleteUser = async (userId: number) => {
     if (!confirm('Are you sure you want to delete this user?')) return;
 
@@ -363,6 +443,16 @@ export default function AdminPage() {
               >
                 Contact Messages
               </button>
+              <button
+                onClick={() => setActiveTab('livestreams')}
+                className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'livestreams'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                Live Streams
+              </button>
             </nav>
           </div>
         </div>
@@ -378,6 +468,8 @@ export default function AdminPage() {
           <SupportTicketsDashboard />
         ) : activeTab === 'contact' ? (
           <ContactMessagesDashboard />
+        ) : activeTab === 'livestreams' ? (
+          <LiveStreamsDashboard token={token || ''} />
         ) : (
           /* Users/Admins Table */
           <div className="bg-blue-50 dark:bg-gray-800 rounded-lg shadow overflow-hidden">
@@ -416,6 +508,9 @@ export default function AdminPage() {
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                       Role
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      Status
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                       Actions
@@ -459,6 +554,23 @@ export default function AdminPage() {
                           </span>
                         )}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        {u.is_banned && (
+                          <span className="px-2 py-1 text-xs rounded-full bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 mr-1">
+                            Banned
+                          </span>
+                        )}
+                        {u.is_restricted && !u.is_banned && (
+                          <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200">
+                            Restricted
+                          </span>
+                        )}
+                        {!u.is_banned && !u.is_restricted && (
+                          <span className="px-2 py-1 text-xs rounded-full bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200">
+                            Active
+                          </span>
+                        )}
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
                         <button
                           onClick={() => openEditModal(u)}
@@ -466,6 +578,36 @@ export default function AdminPage() {
                         >
                           Edit
                         </button>
+                        {u.is_banned ? (
+                          <button
+                            onClick={() => handleUnbanUser(u)}
+                            className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
+                          >
+                            Unban
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleBanUser(u)}
+                            className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
+                          >
+                            Ban
+                          </button>
+                        )}
+                        {u.is_restricted && !u.is_banned ? (
+                          <button
+                            onClick={() => handleUnrestrictUser(u)}
+                            className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
+                          >
+                            Unrestrict
+                          </button>
+                        ) : !u.is_banned ? (
+                          <button
+                            onClick={() => handleRestrictUser(u)}
+                            className="text-yellow-600 hover:text-yellow-900 dark:text-yellow-400 dark:hover:text-yellow-300"
+                          >
+                            Restrict
+                          </button>
+                        ) : null}
                         <button
                           onClick={() => handleDeleteUser(u.id)}
                           className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
@@ -485,6 +627,19 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+
+        {/* Ban/Restrict Modal */}
+        <BanRestrictModal
+          isOpen={showBanRestrictModal}
+          onClose={() => {
+            setShowBanRestrictModal(false);
+            setBanRestrictUser(null);
+          }}
+          onConfirm={handleBanRestrictConfirm}
+          action={banRestrictAction}
+          userName={banRestrictUser?.name || undefined}
+          userEmail={banRestrictUser?.email || undefined}
+        />
 
         {/* Create/Edit Modal */}
         {(showCreateModal || showEditModal) && (

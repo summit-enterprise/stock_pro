@@ -127,9 +127,12 @@ router.put('/preferences', verifyToken, async (req, res) => {
 
 // Get user profile
 router.get('/profile', verifyToken, async (req, res) => {
+  // Note: verifyToken middleware already checks for banned/restricted users
+  // but allows access to support routes. This endpoint should still return
+  // the ban/restrict status so frontend can handle it appropriately.
   try {
     const result = await pool.query(
-      'SELECT id, email, name, username, full_name, avatar_url, auth_type, is_admin, is_superuser, created_at, updated_at FROM users WHERE id = $1',
+      'SELECT id, email, name, username, full_name, avatar_url, auth_type, is_admin, is_superuser, is_banned, is_restricted, ban_reason, banned_at, created_at, updated_at FROM users WHERE id = $1',
       [req.userId]
     );
 

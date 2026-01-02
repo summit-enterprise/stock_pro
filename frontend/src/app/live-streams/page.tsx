@@ -11,6 +11,7 @@ interface YouTubeChannel {
   thumbnail?: string;
   streamType?: 'youtube' | 'direct'; // New: support direct streams
   streamUrl?: string; // New: direct stream URL for news networks
+  pullLivestreams?: boolean; // Whether to pull livestreams or just latest video
 }
 
 interface ChannelLiveStatus {
@@ -22,6 +23,7 @@ interface ChannelLiveStatus {
   error?: string;
   url?: string; // New: direct stream URL
   type?: string; // New: 'youtube' or 'embed'
+  publishedAt?: string; // ISO 8601 date string
 }
 
 // Fintech and Retail Investing Channels
@@ -45,7 +47,7 @@ const FINTECH_CHANNELS: YouTubeChannel[] = [
     category: 'fintech',
   },
   {
-    id: 'UC_86S3_KInp_9KAtKToL_8A',
+    id: 'UCUvvj5lwue7PspotMDjk5UA',
     name: 'Meet Kevin',
     description: 'Meet Kevin - Real estate, stocks, and finance',
     category: 'fintech',
@@ -66,6 +68,42 @@ const FINTECH_CHANNELS: YouTubeChannel[] = [
     id: 'UCMiJUXvEpHHW5JTnW-ez9EA',
     name: 'Jerry Romine Stocks',
     description: 'Jerry Romine - Stock market analysis and trading insights',
+    category: 'fintech',
+  },
+  {
+    id: 'UCnMn36GT_H0X-w5_ckLtlgQ',
+    name: 'Channel',
+    description: 'Financial content and market analysis',
+    category: 'fintech',
+  },
+  {
+    id: 'UCFCEuCsyWP0YkP3CZ3Mr01Q',
+    name: 'Channel',
+    description: 'Financial content and market analysis',
+    category: 'fintech',
+  },
+  {
+    id: 'UCbta0n8i6Rljh0obO7HzG9A',
+    name: 'Channel',
+    description: 'Financial content and market analysis',
+    category: 'fintech',
+  },
+  {
+    id: 'UCfDF3O--fHpa0dTmYRvZjmg',
+    name: 'Channel',
+    description: 'Financial content and market analysis',
+    category: 'fintech',
+  },
+  {
+    id: 'UC9OIwUcx-Uss7xj7s1P5XGw',
+    name: 'Channel',
+    description: 'Financial content and market analysis',
+    category: 'fintech',
+  },
+  {
+    id: 'UCzpwkXk_GlfmWntZ9v4l3Tg',
+    name: 'Channel',
+    description: 'Financial content and market analysis',
     category: 'fintech',
   },
   // Will be populated with additional top fintech YouTubers (up to 25 total)
@@ -143,8 +181,80 @@ export default function LiveStreamsPage() {
   const [loadingStatuses, setLoadingStatuses] = useState(true);
   const [expandedChannelId, setExpandedChannelId] = useState<string | null>(null);
   const expandedVideoRef = useRef<HTMLIFrameElement>(null);
+  const [dbChannels, setDbChannels] = useState<YouTubeChannel[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(true);
 
-  const channels = activeCategory === 'fintech' ? FINTECH_CHANNELS : NEWS_CHANNELS;
+  // Fetch channels from database
+  useEffect(() => {
+    const fetchChannels = async () => {
+      // Check if user is banned/restricted before fetching
+      const userData = localStorage.getItem('user');
+      if (userData) {
+        try {
+          const parsedUser = JSON.parse(userData);
+          if (parsedUser.is_banned || parsedUser.is_restricted) {
+            setLoadingChannels(false);
+            return; // Don't fetch data for banned/restricted users
+          }
+        } catch (e) {
+          // Continue if parsing fails
+        }
+      }
+
+      setLoadingChannels(true);
+      try {
+        const token = localStorage.getItem('token');
+        const headers: HeadersInit = {
+          'Content-Type': 'application/json',
+        };
+        
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const response = await fetch('http://localhost:3001/api/youtube/channels', {
+          headers,
+        });
+
+        if (response.status === 403) {
+          // User is banned/restricted, don't process response
+          setLoadingChannels(false);
+          return;
+        }
+
+        if (response.ok) {
+          const data = await response.json();
+          // Map database channels to YouTubeChannel format
+          const mappedChannels: YouTubeChannel[] = data.channels.map((ch: any) => ({
+            id: ch.channel_id,
+            name: ch.channel_name,
+            description: ch.subject || '',
+            category: ch.category,
+            streamType: ch.content_type === 'live' ? 'youtube' : 'youtube',
+            pullLivestreams: ch.pull_livestreams,
+          }));
+          setDbChannels(mappedChannels);
+        } else {
+          // Fallback to hardcoded channels if API fails
+          console.warn('Failed to fetch channels from database, using fallback');
+          setDbChannels(activeCategory === 'fintech' ? FINTECH_CHANNELS : NEWS_CHANNELS);
+        }
+      } catch (error) {
+        console.error('Error fetching channels:', error);
+        // Fallback to hardcoded channels
+        setDbChannels(activeCategory === 'fintech' ? FINTECH_CHANNELS : NEWS_CHANNELS);
+      } finally {
+        setLoadingChannels(false);
+      }
+    };
+
+    fetchChannels();
+  }, [activeCategory]);
+
+  // Use database channels if available, otherwise fallback to hardcoded
+  const channels = dbChannels.length > 0 
+    ? dbChannels.filter(ch => ch.category === activeCategory)
+    : (activeCategory === 'fintech' ? FINTECH_CHANNELS : NEWS_CHANNELS);
   const totalChannels = Math.min(channels.length, MAX_CHANNELS);
   const totalPages = Math.ceil(totalChannels / CHANNELS_PER_PAGE);
   
@@ -163,6 +273,20 @@ export default function LiveStreamsPage() {
   // Fetch live statuses for all channels
   useEffect(() => {
     const fetchLiveStatuses = async () => {
+      // Check if user is banned/restricted before fetching
+      const userData = localStorage.getItem('user');
+      if (userData) {
+        try {
+          const parsedUser = JSON.parse(userData);
+          if (parsedUser.is_banned || parsedUser.is_restricted) {
+            setLoadingStatuses(false);
+            return; // Don't fetch data for banned/restricted users
+          }
+        } catch (e) {
+          // Continue if parsing fails
+        }
+      }
+
       if (channels.length === 0) {
         setLoadingStatuses(false);
         return;
@@ -178,18 +302,68 @@ export default function LiveStreamsPage() {
 
         // Fetch YouTube channel statuses
         if (youtubeChannels.length > 0) {
-          const channelIds = youtubeChannels.map(ch => ch.id);
+          // Use channel_id from database channels, or id from hardcoded channels
+          const channelIds = youtubeChannels.map(ch => ch.id || (ch as any).channel_id);
+          const token = localStorage.getItem('token');
+          
+          const headers: HeadersInit = {
+            'Content-Type': 'application/json',
+          };
+          
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+
+          console.log('Fetching statuses for channel IDs:', channelIds);
+
           const response = await fetch('http://localhost:3001/api/youtube/channels/status', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers,
             body: JSON.stringify({ channelIds }),
           });
 
+          if (response.status === 403) {
+            // User is banned/restricted, don't process response
+            setLoadingStatuses(false);
+            return;
+          }
+
           if (response.ok) {
             const youtubeStatuses = await response.json();
+            console.log('YouTube statuses received:', youtubeStatuses);
+            
+            // Ensure each status has the correct structure
+            Object.keys(youtubeStatuses).forEach(channelId => {
+              const status = youtubeStatuses[channelId];
+              console.log(`Channel ${channelId} status:`, {
+                isLive: status.isLive,
+                videoId: status.videoId,
+                status: status.status,
+                title: status.title,
+              });
+              
+              // Ensure channelId is set
+              if (!status.channelId) {
+                status.channelId = channelId;
+              }
+            });
+            
             Object.assign(statuses, youtubeStatuses);
+          } else {
+            const errorData = await response.json().catch(() => ({}));
+            console.error('YouTube API error:', response.status, errorData);
+            // Set fallback statuses for YouTube channels
+            youtubeChannels.forEach(channel => {
+              statuses[channel.id] = {
+                isLive: false,
+                videoId: null,
+                title: channel.name,
+                thumbnail: null,
+                status: 'error',
+                error: errorData.error || 'Failed to fetch video data',
+                channelId: channel.id,
+              };
+            });
           }
         }
 
@@ -252,8 +426,10 @@ export default function LiveStreamsPage() {
 
     fetchLiveStatuses();
 
-    // Refresh live statuses every 5 minutes (300000 ms)
-    const interval = setInterval(fetchLiveStatuses, 300000);
+    // Refresh live statuses every 60 minutes (3600000 ms)
+    // Reduced frequency to minimize YouTube API quota usage
+    // The backend now batches channel info requests and caches results for efficiency
+    const interval = setInterval(fetchLiveStatuses, 3600000);
     return () => clearInterval(interval);
   }, [channels]);
 
@@ -290,6 +466,38 @@ export default function LiveStreamsPage() {
       return `https://www.youtube.com/watch?v=${videoId}`;
     }
     return `https://www.youtube.com/channel/${channelId}`;
+  };
+
+  const formatDate = (publishedAt?: string | null) => {
+    if (!publishedAt) return null;
+    
+    try {
+      const date = new Date(publishedAt);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+      
+      if (diffMins < 1) {
+        return 'Just now';
+      } else if (diffMins < 60) {
+        return `${diffMins} minute${diffMins === 1 ? '' : 's'} ago`;
+      } else if (diffHours < 24) {
+        return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+      } else if (diffDays < 7) {
+        return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+      } else {
+        // Format as date
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined 
+        });
+      }
+    } catch (error) {
+      return null;
+    }
   };
 
   const getChannelUrl = (channelId: string) => {
@@ -421,13 +629,18 @@ export default function LiveStreamsPage() {
                     {/* Expanded Video Info */}
                     <div className="p-4">
                       <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-2" style={{ overflow: 'visible' }}>
                           <h3 className="text-xl font-bold text-gray-900 dark:text-white">
                             {expandedChannel.name}
                           </h3>
                           {status.isLive && (
-                            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-red-600 text-white animate-pulse">
-                              LIVE
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-red-600 text-white relative">
+                              <span className="absolute -left-1.5 -top-1.5 w-5 h-5 bg-red-600 rounded-full animate-ping opacity-75"></span>
+                              <span className="absolute -left-1 -top-1 w-4 h-4 bg-red-500 rounded-full animate-pulse"></span>
+                              <span className="relative flex items-center z-10">
+                                <span className="w-2 h-2 bg-white rounded-full mr-2"></span>
+                                LIVE
+                              </span>
                             </span>
                           )}
                           {!status.isLive && status.videoId && (
@@ -450,6 +663,11 @@ export default function LiveStreamsPage() {
                       {status.title && (
                         <p className="text-sm text-gray-700 dark:text-gray-300 mt-2 font-medium">
                           {status.title}
+                        </p>
+                      )}
+                      {status.publishedAt && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                          Last updated: {formatDate(status.publishedAt)}
                         </p>
                       )}
                     </div>
@@ -512,13 +730,18 @@ export default function LiveStreamsPage() {
 
                       {/* Channel Info */}
                       <div className="p-3">
-                        <div className="flex items-center space-x-2 mb-1">
+                        <div className="flex items-center space-x-2 mb-1" style={{ overflow: 'visible' }}>
                           <h3 className="font-semibold text-sm text-gray-900 dark:text-white line-clamp-1">
                             {channel.name}
                           </h3>
                           {status.isLive && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-600 text-white animate-pulse">
-                              LIVE
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-red-600 text-white relative">
+                              <span className="absolute -left-1 -top-1 w-4 h-4 bg-red-600 rounded-full animate-ping opacity-75"></span>
+                              <span className="absolute -left-0.5 -top-0.5 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
+                              <span className="relative flex items-center z-10">
+                                <span className="w-1.5 h-1.5 bg-white rounded-full mr-1.5"></span>
+                                LIVE
+                              </span>
                             </span>
                           )}
                           {!status.isLive && status.videoId && (
@@ -535,6 +758,11 @@ export default function LiveStreamsPage() {
                         {channel.description && (
                           <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2">
                             {channel.description}
+                          </p>
+                        )}
+                        {status.publishedAt && (
+                          <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                            {formatDate(status.publishedAt)}
                           </p>
                         )}
                       </div>

@@ -22,7 +22,7 @@ router.post('/tickets', verifyToken, async (req, res) => {
 
     const ticketNumber = generateTicketNumber();
     const validPriorities = ['unknown', 'low', 'medium', 'high', 'urgent'];
-    const validCategories = ['bug', 'feature', 'technical', 'account', 'billing', 'data', 'api', 'other'];
+    const validCategories = ['bug', 'feature', 'technical', 'account', 'account_restricted_banned', 'billing', 'data', 'api', 'banned', 'restricted', 'other'];
     
     // Default to 'unknown' if no priority provided or invalid priority
     const ticketPriority = priority && validPriorities.includes(priority) ? priority : 'unknown';
@@ -114,6 +114,147 @@ router.get('/tickets/:id', verifyToken, async (req, res) => {
   }
 });
 
+// Get ticket replies (for regular users)
+router.get('/tickets/:id/replies', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // First verify the ticket belongs to the user
+    const ticketResult = await pool.query(
+      'SELECT id FROM support_tickets WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    if (ticketResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    // Get all replies for this ticket
+    const result = await pool.query(
+      `SELECT 
+        tr.id,
+        tr.ticket_id,
+        tr.user_id,
+        tr.is_admin,
+        tr.message,
+        tr.created_at,
+        u.email as user_email,
+        u.name as user_name
+      FROM ticket_replies tr
+      LEFT JOIN users u ON tr.user_id = u.id
+      WHERE tr.ticket_id = $1
+      ORDER BY tr.created_at ASC`,
+      [id]
+    );
+
+    res.json({ replies: result.rows });
+  } catch (error) {
+    console.error('Error fetching ticket replies:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// User: Add reply to their own ticket
+router.post('/tickets/:id/replies', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+    const userId = req.userId;
+
+    if (!message || message.trim().length === 0) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+
+    // Verify ticket exists and belongs to the user
+    const ticketResult = await pool.query(
+      'SELECT id, status FROM support_tickets WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    if (ticketResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    // Don't allow replies to closed tickets
+    const ticketStatus = ticketResult.rows[0].status;
+    if (ticketStatus === 'closed' || ticketStatus === 'resolved') {
+      return res.status(400).json({ error: 'Cannot reply to a closed ticket' });
+    }
+
+    // Add reply (user replies are not marked as admin)
+    const replyResult = await pool.query(
+      `INSERT INTO ticket_replies (ticket_id, user_id, is_admin, message)
+       VALUES ($1, $2, FALSE, $3)
+       RETURNING *`,
+      [id, userId, message.trim()]
+    );
+
+    // Update ticket updated_at timestamp
+    await pool.query(
+      'UPDATE support_tickets SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+      [id]
+    );
+
+    // Get reply with user info
+    const fullReplyResult = await pool.query(
+      `SELECT 
+        tr.id,
+        tr.ticket_id,
+        tr.user_id,
+        tr.is_admin,
+        tr.message,
+        tr.created_at,
+        u.email as user_email,
+        u.name as user_name
+      FROM ticket_replies tr
+      LEFT JOIN users u ON tr.user_id = u.id
+      WHERE tr.id = $1`,
+      [replyResult.rows[0].id]
+    );
+
+    res.status(201).json({ reply: fullReplyResult.rows[0] });
+  } catch (error) {
+    console.error('Error adding ticket reply:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// User: Close their own ticket
+router.patch('/tickets/:id/close', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId;
+
+    // Verify ticket exists and belongs to the user
+    const ticketResult = await pool.query(
+      'SELECT id, status FROM support_tickets WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    if (ticketResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    // Update ticket status to closed
+    const result = await pool.query(
+      `UPDATE support_tickets 
+       SET status = 'closed', resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $1 AND user_id = $2
+       RETURNING id, ticket_number, status, resolved_at`,
+      [id, userId]
+    );
+
+    res.json({
+      message: 'Ticket closed successfully',
+      ticket: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error closing ticket:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
 // Admin: Get all tickets with search and filters
 router.get('/admin/tickets', requireAdmin, async (req, res) => {
   try {
@@ -144,8 +285,11 @@ router.get('/admin/tickets', requireAdmin, async (req, res) => {
         st.created_at,
         st.updated_at,
         st.resolved_at,
+        st.user_id,
         u.email as user_email,
         u.name as user_name,
+        u.is_banned,
+        u.is_restricted,
         a.email as assigned_email,
         a.name as assigned_name
       FROM support_tickets st

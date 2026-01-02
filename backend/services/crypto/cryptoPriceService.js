@@ -168,9 +168,9 @@ async function storeHistoricalPrices(symbol, priceData) {
       for (const point of batch) {
         try {
           await pool.query(
-            `INSERT INTO asset_data (symbol, date, open, high, low, close, volume, adjusted_close)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             ON CONFLICT (symbol, date) 
+            `INSERT INTO asset_data (symbol, date, timestamp, open, high, low, close, volume, adjusted_close)
+             VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (symbol, date, COALESCE(timestamp, '1970-01-01 00:00:00'::timestamp)) 
              DO UPDATE SET 
                open = EXCLUDED.open,
                high = EXCLUDED.high,

@@ -1,0 +1,4 @@
+
+# GCP Service Account Keys
+.secrets/
+*.json

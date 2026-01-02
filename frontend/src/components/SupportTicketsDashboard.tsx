@@ -15,8 +15,11 @@ interface Ticket {
   created_at: string;
   updated_at: string;
   resolved_at: string | null;
+  user_id: number | null;
   user_email: string | null;
   user_name: string | null;
+  is_banned?: boolean;
+  is_restricted?: boolean;
   assigned_email: string | null;
   assigned_name: string | null;
 }
@@ -201,6 +204,62 @@ export default function SupportTicketsDashboard() {
       }
     } catch (error) {
       console.error('Error fetching replies:', error);
+    }
+  };
+
+  const handleUnbanUser = async (userId: number) => {
+    if (!confirm('Are you sure you want to unban this user?')) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const response = await fetch(`http://localhost:3001/api/admin/users/${userId}/unban`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        await fetchUserStatus(userId);
+        fetchTickets(); // Refresh tickets
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Failed to unban user');
+      }
+    } catch (err) {
+      alert('Failed to unban user');
+    }
+  };
+
+  const handleUnrestrictUser = async (userId: number) => {
+    if (!confirm('Are you sure you want to remove restriction from this user?')) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      const response = await fetch(`http://localhost:3001/api/admin/users/${userId}/unrestrict`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        fetchTickets(); // Refresh tickets
+        // Update selected ticket if it's the same user
+        if (selectedTicket?.user_id === userId) {
+          const updatedTicket = { ...selectedTicket, is_restricted: false };
+          setSelectedTicket(updatedTicket);
+        }
+      } else {
+        const data = await response.json();
+        alert(data.error || 'Failed to remove restriction');
+      }
+    } catch (err) {
+      alert('Failed to remove restriction');
     }
   };
 
@@ -640,9 +699,46 @@ export default function SupportTicketsDashboard() {
                   <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                     User
                   </label>
-                  <p className="text-sm text-gray-900 dark:text-white">
-                    {selectedTicket.user_email || 'N/A'}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-gray-900 dark:text-white">
+                      {selectedTicket.user_email || 'N/A'}
+                    </p>
+                    {(selectedTicket.is_banned || selectedTicket.is_restricted) && (
+                      <span className={`text-xs px-2 py-1 rounded-full ${
+                        selectedTicket.is_banned 
+                          ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                          : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                      }`}>
+                        {selectedTicket.is_banned ? 'Banned' : 'Restricted'}
+                      </span>
+                    )}
+                  </div>
+                  {selectedTicket.user_id && (selectedTicket.is_banned || selectedTicket.is_restricted) && (
+                    <div className="mt-2 flex gap-2">
+                      {selectedTicket.is_banned && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnbanUser(selectedTicket.user_id!);
+                          }}
+                          className="text-xs px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors"
+                        >
+                          Unban User
+                        </button>
+                      )}
+                      {selectedTicket.is_restricted && !selectedTicket.is_banned && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleUnrestrictUser(selectedTicket.user_id!);
+                          }}
+                          className="text-xs px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors"
+                        >
+                          Unrestrict User
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 

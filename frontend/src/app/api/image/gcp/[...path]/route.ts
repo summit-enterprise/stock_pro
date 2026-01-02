@@ -43,10 +43,12 @@ export async function GET(
     const contentType = response.headers.get('Content-Type') || `image/${format}`;
     
     // Return the image with appropriate headers
+    // Use long cache for GCP images (they're immutable)
     return new NextResponse(imageBuffer, {
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': 'public, max-age=31536000, immutable', // Cache for 1 year
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (error) {

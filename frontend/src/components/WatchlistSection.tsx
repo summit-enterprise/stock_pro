@@ -32,6 +32,20 @@ export default function WatchlistSection() {
   }, []);
 
   const fetchWatchlist = async () => {
+    // Check if user is banned/restricted before fetching
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      try {
+        const parsedUser = JSON.parse(userData);
+        if (parsedUser.is_banned || parsedUser.is_restricted) {
+          setLoading(false);
+          return; // Don't fetch data for banned/restricted users
+        }
+      } catch (e) {
+        // Continue if parsing fails
+      }
+    }
+
     try {
       const token = localStorage.getItem('token');
       if (!token) {
@@ -44,6 +58,12 @@ export default function WatchlistSection() {
           'Authorization': `Bearer ${token}`,
         },
       });
+
+      if (response.status === 403) {
+        // User is banned/restricted, don't process response
+        setLoading(false);
+        return;
+      }
 
       if (response.ok) {
         const data = await response.json();
@@ -118,18 +138,18 @@ export default function WatchlistSection() {
             <div className="text-xs text-gray-600 dark:text-gray-400 mb-2 line-clamp-2 min-h-[2.5rem]">
               {item.name}
             </div>
-            <div className="text-lg font-bold text-gray-900 dark:text-white mb-1">
-              ${item.price.toFixed(2)}
+            <div className="text-sm font-bold text-gray-900 dark:text-white mb-1 truncate" title={item.price ? `$${item.price.toFixed(2)}` : 'N/A'}>
+              ${item.price ? (item.price > 1000 ? item.price.toFixed(0) : item.price.toFixed(2)) : 'N/A'}
             </div>
             <div
               className={`text-sm font-medium ${
-                item.change >= 0
+                (item.change ?? 0) >= 0
                   ? 'text-green-600 dark:text-green-400'
                   : 'text-red-600 dark:text-red-400'
               }`}
             >
-              {item.change >= 0 ? '+' : ''}
-              {item.changePercent.toFixed(2)}%
+              {(item.change ?? 0) >= 0 ? '+' : ''}
+              {item.changePercent ? item.changePercent.toFixed(2) : '0.00'}%
             </div>
           </div>
         ))}

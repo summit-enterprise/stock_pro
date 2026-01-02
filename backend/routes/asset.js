@@ -45,73 +45,123 @@ router.get('/:symbol', async (req, res) => {
     // Calculate date range based on range parameter
     const getDateRange = (range) => {
       const end = new Date();
+      end.setHours(23, 59, 59, 999); // End of today
       const start = new Date();
       
       switch (range) {
         case '1D':
-          start.setDate(start.getDate() - 1);
+          // TODAY: 12am-11pm
+          start.setHours(0, 0, 0, 0);
           break;
-        case '5D':
-          start.setDate(start.getDate() - 5);
-          break;
-        case '1W':
-          start.setDate(start.getDate() - 7);
+        case '7D':
+          // Today + 6 previous days (7 days total including today)
+          start.setDate(start.getDate() - 6);
+          start.setHours(0, 0, 0, 0);
           break;
         case '1M':
+          // Exactly 1 month ago to today
           start.setMonth(start.getMonth() - 1);
+          start.setHours(0, 0, 0, 0);
           break;
         case '3M':
+          // Exactly 3 months ago to today
           start.setMonth(start.getMonth() - 3);
+          start.setHours(0, 0, 0, 0);
           break;
         case '6M':
+          // Exactly 6 months ago to today
           start.setMonth(start.getMonth() - 6);
+          start.setHours(0, 0, 0, 0);
           break;
         case 'YTD':
-          start.setMonth(0, 1); // January 1st of current year
-          break;
-        case '1Y':
-          start.setFullYear(start.getFullYear() - 1);
+          // Year to date: January 1st of current year to today
+          start.setFullYear(start.getFullYear(), 0, 1);
+          start.setHours(0, 0, 0, 0);
           break;
         case '3Y':
+          // Exactly 3 years ago to today
           start.setFullYear(start.getFullYear() - 3);
+          start.setHours(0, 0, 0, 0);
           break;
         case '5Y':
+          // Exactly 5 years ago to today
           start.setFullYear(start.getFullYear() - 5);
-          break;
-        case '10Y':
-          start.setFullYear(start.getFullYear() - 10);
+          start.setHours(0, 0, 0, 0);
           break;
         case 'MAX':
-          start.setFullYear(2010, 0, 1); // Start from 2010 or earliest available
+          // 10 years of data
+          start.setUTCFullYear(start.getUTCFullYear() - 10);
+          start.setHours(0, 0, 0, 0);
           break;
         default:
+          // Default to 1 month
           start.setMonth(start.getMonth() - 1);
+          start.setHours(0, 0, 0, 0);
       }
       
       return {
         start: start.toISOString().split('T')[0],
-        end: end.toISOString().split('T')[0]
+        end: end.toISOString().split('T')[0],
+        startTimestamp: start.toISOString(),
+        endTimestamp: end.toISOString()
       };
     };
 
     const dateRange = getDateRange(range);
 
     // Check Redis cache first for historical data
-    const cacheKey = `asset_data:${symbol}:${range}`;
-    const CACHE_TTL = range === 'MAX' || range === '10Y' ? 60 * 60 : 5 * 60; // 1 hour for MAX/10Y, 5 min for others
+    // For 1D, check today's daily record cache
+    // For other ranges, check general asset_data cache
     const redisClient = await getRedisClient();
-    
     let historicalData = [];
     let cacheHit = false;
     
     if (redisClient && redisClient.isOpen) {
       try {
-        const cachedData = await redisClient.get(cacheKey);
-        if (cachedData) {
-          const parsed = JSON.parse(cachedData);
-          historicalData = parsed;
-          cacheHit = true;
-          console.log(`Asset data cache hit for ${symbol} (${range})`);
+        if (range === '1D') {
+          // For 1D, check hourly data cache
+          const today = new Date();
+          const todayStr = today.toISOString().split('T')[0];
+          
+          // Check for hourly data cache first
+          const hourlyCacheKey = `hourly_data:${symbol}:${todayStr}`;
+          const hourlyCachedData = await redisClient.get(hourlyCacheKey);
+          
+          if (hourlyCachedData) {
+            const parsed = JSON.parse(hourlyCachedData);
+            // Transform hourly data to chart format
+            historicalData = Array.isArray(parsed) ? parsed.map(point => ({
+              timestamp: point.timestamp ? new Date(point.timestamp).getTime() : new Date(point.date).getTime(),
+              date: point.date,
+              open: parseFloat(point.open),
+              high: parseFloat(point.high),
+              low: parseFloat(point.low),
+              close: parseFloat(point.close),
+              volume: parseFloat(point.volume) || 0,
+            })) : [];
+            cacheHit = true;
+            console.log(`Hourly data cache hit for ${symbol} (1D - ${todayStr})`);
+          } else {
+            // Fallback to general asset_data cache
+            const cacheKey = `asset_data:${symbol}:${range}`;
+            const cachedData = await redisClient.get(cacheKey);
+            if (cachedData) {
+              const parsed = JSON.parse(cachedData);
+              historicalData = Array.isArray(parsed) ? parsed : [parsed];
+              cacheHit = true;
+              console.log(`Asset data cache hit for ${symbol} (${range})`);
+            }
+          }
+        } else {
+          // For other ranges, check general asset_data cache
+          const cacheKey = `asset_data:${symbol}:${range}`;
+          const cachedData = await redisClient.get(cacheKey);
+          if (cachedData) {
+            const parsed = JSON.parse(cachedData);
+            historicalData = parsed;
+            cacheHit = true;
+            console.log(`Asset data cache hit for ${symbol} (${range})`);
+          }
         }
       } catch (redisError) {
         console.warn('Redis cache read failed for asset data, continuing...');
@@ -120,28 +170,332 @@ router.get('/:symbol', async (req, res) => {
 
     // If cache miss, fetch from database
     if (!cacheHit) {
-      const dbResult = await pool.query(
-        `SELECT date, open, high, low, close, volume 
-         FROM asset_data 
-         WHERE symbol = $1 AND date >= $2 AND date <= $3 
-         ORDER BY date ASC`,
-        [symbol, dateRange.start, dateRange.end]
-      );
+      try {
+        // Check if timestamp column exists
+        const columnCheck = await pool.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'asset_data' 
+            AND column_name = 'timestamp';
+        `);
+        const hasTimestampColumn = columnCheck.rows.length > 0;
+        
+        let dbResult;
+        
+        if (range === '1D') {
+          // For 1D, fetch hourly data for today (or last market date) from 12am to 11:59pm
+          const today = new Date();
+          const todayStr = today.toISOString().split('T')[0];
+          
+          // Get the most recent date that has hourly data
+          const mostRecentDateResult = await pool.query(
+            `SELECT DISTINCT date
+             FROM asset_data 
+             WHERE symbol = $1 
+               AND timestamp IS NOT NULL
+             ORDER BY date DESC
+             LIMIT 1`,
+            [symbol]
+          );
+          
+          let targetDateStr = todayStr;
+          if (mostRecentDateResult.rows.length > 0) {
+            targetDateStr = mostRecentDateResult.rows[0].date;
+          }
+          
+          // Fetch all hourly data for that date (12am to 11:59pm)
+          const dayStart = new Date(targetDateStr);
+          dayStart.setHours(0, 0, 0, 0);
+          const dayEnd = new Date(targetDateStr);
+          dayEnd.setHours(23, 59, 59, 999);
+          
+          dbResult = await pool.query(
+            `SELECT date, timestamp, open, high, low, close, volume, adjusted_close
+             FROM asset_data 
+             WHERE symbol = $1 
+               AND date = $2
+               AND timestamp IS NOT NULL
+               AND timestamp >= $3
+               AND timestamp <= $4
+             ORDER BY timestamp ASC`,
+            [symbol, targetDateStr, dayStart.toISOString(), dayEnd.toISOString()]
+          );
+          
+          // If no hourly data, fallback to daily record
+          if (dbResult.rows.length === 0) {
+            dbResult = await pool.query(
+              `SELECT date, timestamp, open, high, low, close, volume, adjusted_close
+               FROM asset_data 
+               WHERE symbol = $1 
+               AND timestamp IS NULL
+               ORDER BY date DESC
+               LIMIT 1`,
+              [symbol]
+            );
+          }
+          
+          // Cache hourly data in Redis
+          if (dbResult.rows.length > 0 && redisClient && redisClient.isOpen) {
+            const hourlyData = dbResult.rows.map(row => ({
+              timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : null,
+              date: row.date instanceof Date ? row.date.toISOString().split('T')[0] : row.date,
+              open: parseFloat(row.open),
+              high: parseFloat(row.high),
+              low: parseFloat(row.low),
+              close: parseFloat(row.close),
+              volume: parseFloat(row.volume) || 0,
+            }));
+            const hourlyCacheKey = `hourly_data:${symbol}:${targetDateStr}`;
+            await redisClient.setEx(hourlyCacheKey, 24 * 60 * 60, JSON.stringify(hourlyData)); // 24 hour TTL
+          }
+        } else if (hasTimestampColumn) {
+          // Fetch daily data only (timestamp IS NULL for daily records)
+          // For 7D, we need to ensure we get all 7 days including weekends
+          if (range === '7D') {
+            // First, get existing daily data
+            dbResult = await pool.query(
+              `SELECT date, timestamp, open, high, low, close, volume 
+               FROM asset_data 
+               WHERE symbol = $1 
+                 AND date >= $2 
+                 AND date <= $3 
+                 AND timestamp IS NULL
+               ORDER BY date ASC`,
+              [symbol, dateRange.start, dateRange.end]
+            );
+            
+            // Generate missing days (including weekends) with flat prices
+            const existingDates = new Set(dbResult.rows.map(row => row.date.toISOString().split('T')[0]));
+            const startDate = new Date(dateRange.start);
+            const endDate = new Date(dateRange.end);
+            const missingDays = [];
+            
+            // Get the last trading day's close price to use for weekends
+            let lastClosePrice = null;
+            if (dbResult.rows.length > 0) {
+              // Sort by date descending to get most recent trading day
+              const sortedRows = [...dbResult.rows].sort((a, b) => {
+                const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+                const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+                return dateB - dateA;
+              });
+              lastClosePrice = parseFloat(sortedRows[0].close);
+            } else {
+              // No existing data in range, try to get most recent data from database
+              const recentResult = await pool.query(
+                `SELECT close FROM asset_data 
+                 WHERE symbol = $1 
+                   AND timestamp IS NULL
+                 ORDER BY date DESC 
+                 LIMIT 1`,
+                [symbol]
+              );
+              if (recentResult.rows.length > 0) {
+                lastClosePrice = parseFloat(recentResult.rows[0].close);
+              } else {
+                // No data at all, use base price
+                const { BASE_PRICES } = require('../services/utils/mockData');
+                lastClosePrice = BASE_PRICES[symbol] || 100.00;
+              }
+            }
+            
+            // Track the last trading day's close as we iterate through days
+            let currentLastClose = lastClosePrice;
+            
+            // Check if asset is crypto (crypto trades on weekends)
+            const { determineCategory } = require('../utils/categoryUtils');
+            const assetInfo = await pool.query('SELECT category FROM asset_info WHERE symbol = $1', [symbol]);
+            const isCryptoAsset = assetInfo.rows.length > 0 && 
+              (assetInfo.rows[0].category === 'Crypto' || symbol.startsWith('X:'));
+            
+            // Generate data for 7 days
+            // For crypto: include all days (including weekends)
+            // For non-crypto: only trading days (skip weekends)
+            for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+              const dateStr = d.toISOString().split('T')[0];
+              const dayOfWeek = d.getDay();
+              const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+              
+              // Skip weekends for non-crypto assets
+              if (!isCryptoAsset && isWeekend) {
+                continue;
+              }
+              
+              if (!existingDates.has(dateStr)) {
+                // Missing day
+                if (isWeekend && isCryptoAsset) {
+                  // Weekend for crypto: continue trading with price movement
+                  const volatility = symbol.includes('BTC') || symbol.includes('ETH') ? 0.03 : 0.015;
+                  const change = (Math.random() * 2 - 1) * volatility;
+                  const open = currentLastClose;
+                  const close = open * (1 + change);
+                  const high = Math.max(open, close) * (1 + Math.random() * volatility * 0.3);
+                  const low = Math.min(open, close) * (1 - Math.random() * volatility * 0.3);
+                  
+                  currentLastClose = close;
+                  
+                  missingDays.push({
+                    date: new Date(d),
+                    timestamp: null,
+                    open: parseFloat(open.toFixed(2)),
+                    high: parseFloat(high.toFixed(2)),
+                    low: parseFloat(low.toFixed(2)),
+                    close: parseFloat(close.toFixed(2)),
+                    volume: Math.floor((mockData.generateVolume || require('../services/utils/mockData').generateVolume)(symbol, close))
+                  });
+                } else {
+                  // Trading day: use last close as open, generate small movement
+                  const volatility = 0.01; // Small volatility for missing trading days
+                  const change = (Math.random() * 2 - 1) * volatility;
+                  const open = currentLastClose;
+                  const close = open * (1 + change);
+                  const high = Math.max(open, close) * (1 + Math.random() * volatility * 0.3);
+                  const low = Math.min(open, close) * (1 - Math.random() * volatility * 0.3);
+                  
+                  currentLastClose = close; // Update for next day
+                  
+                  missingDays.push({
+                    date: new Date(d),
+                    timestamp: null,
+                    open: parseFloat(open.toFixed(2)),
+                    high: parseFloat(high.toFixed(2)),
+                    low: parseFloat(low.toFixed(2)),
+                    close: parseFloat(close.toFixed(2)),
+                    volume: Math.floor((mockData.generateVolume || require('../services/utils/mockData').generateVolume)(symbol, close))
+                  });
+                }
+              } else {
+                // Day exists in database, update last close price for next iteration
+                const existingRow = dbResult.rows.find(row => {
+                  const rowDate = row.date instanceof Date ? row.date : new Date(row.date);
+                  return rowDate.toISOString().split('T')[0] === dateStr;
+                });
+                if (existingRow && !isWeekend) {
+                  currentLastClose = parseFloat(existingRow.close);
+                }
+              }
+            }
+            
+            // Combine existing and missing days, sort by date
+            const allDays = [...dbResult.rows, ...missingDays].sort((a, b) => {
+              const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+              const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+              return dateA - dateB;
+            });
+            
+            dbResult = { rows: allDays };
+          } else {
+            // For other ranges, fetch normally
+            dbResult = await pool.query(
+              `SELECT date, timestamp, open, high, low, close, volume 
+               FROM asset_data 
+               WHERE symbol = $1 
+                 AND date >= $2 
+                 AND date <= $3 
+                 AND timestamp IS NULL
+               ORDER BY date ASC`,
+              [symbol, dateRange.start, dateRange.end]
+            );
+          }
+        } else {
+          // Fallback: timestamp column doesn't exist, fetch all data
+          dbResult = await pool.query(
+            `SELECT date, open, high, low, close, volume 
+             FROM asset_data 
+             WHERE symbol = $1 
+               AND date >= $2 
+               AND date <= $3 
+             ORDER BY date ASC`,
+            [symbol, dateRange.start, dateRange.end]
+          );
+        }
 
-      historicalData = dbResult.rows.map(row => ({
-        timestamp: new Date(row.date).getTime(),
-        open: parseFloat(row.open),
-        high: parseFloat(row.high),
-        low: parseFloat(row.low),
-        close: parseFloat(row.close),
-        volume: parseInt(row.volume) || 0
-      }));
+        historicalData = dbResult.rows.map(row => {
+          // Use timestamp if available (hourly data), otherwise use date (daily data)
+          const timestamp = row.timestamp ? new Date(row.timestamp).getTime() : new Date(row.date).getTime();
+          return {
+            timestamp: timestamp,
+            open: parseFloat(row.open),
+            high: parseFloat(row.high),
+            low: parseFloat(row.low),
+            close: parseFloat(row.close),
+            volume: parseInt(row.volume) || 0
+          };
+        });
+      } catch (dbError) {
+        console.error(`Database query error for ${symbol}:`, dbError);
+        // If query fails, try a simpler query without timestamp filtering
+        try {
+          const fallbackResult = await pool.query(
+            `SELECT date, timestamp, open, high, low, close, volume 
+             FROM asset_data 
+             WHERE symbol = $1 
+               AND date >= $2 
+               AND date <= $3 
+             ORDER BY date ASC, COALESCE(timestamp, '1970-01-01'::timestamp) ASC`,
+            [symbol, dateRange.start, dateRange.end]
+          );
+          
+          console.log(`Fallback query succeeded for ${symbol}, got ${fallbackResult.rows.length} rows`);
+          historicalData = fallbackResult.rows.map(row => {
+            const timestamp = row.timestamp ? new Date(row.timestamp).getTime() : new Date(row.date).getTime();
+            return {
+              timestamp: timestamp,
+              open: parseFloat(row.open),
+              high: parseFloat(row.high),
+              low: parseFloat(row.low),
+              close: parseFloat(row.close),
+              volume: parseInt(row.volume) || 0
+            };
+          });
+        } catch (fallbackError) {
+          console.error(`Fallback query also failed for ${symbol}:`, fallbackError);
+          console.error(`Fallback error details:`, {
+            message: fallbackError.message,
+            code: fallbackError.code,
+            detail: fallbackError.detail,
+            hint: fallbackError.hint
+          });
+          
+          // Try simplest query without timestamp column (for backward compatibility)
+          try {
+            console.log(`Attempting simplest query for ${symbol} (no timestamp column)...`);
+            const simpleResult = await pool.query(
+              `SELECT date, open, high, low, close, volume 
+               FROM asset_data 
+               WHERE symbol = $1 
+                 AND date >= $2 
+                 AND date <= $3 
+               ORDER BY date ASC`,
+              [symbol, dateRange.start, dateRange.end]
+            );
+            
+            console.log(`Simplest query succeeded for ${symbol}, got ${simpleResult.rows.length} rows`);
+            historicalData = simpleResult.rows.map(row => {
+              const timestamp = new Date(row.date).getTime();
+              return {
+                timestamp: timestamp,
+                open: parseFloat(row.open),
+                high: parseFloat(row.high),
+                low: parseFloat(row.low),
+                close: parseFloat(row.close),
+                volume: parseInt(row.volume) || 0
+              };
+            });
+          } catch (simpleError) {
+            console.error(`Simplest query also failed for ${symbol}:`, simpleError);
+            // Return empty array instead of throwing to prevent 500 error
+            historicalData = [];
+            console.warn(`Using empty historical data for ${symbol} due to database errors`);
+          }
+        }
+      }
 
       // Cache in Redis
       if (redisClient && redisClient.isOpen && historicalData.length > 0) {
         try {
           await redisClient.setEx(cacheKey, CACHE_TTL, JSON.stringify(historicalData));
-          console.log(`Asset data cached for ${symbol} (${range})`);
+          console.log(`Asset data cached for ${symbol} (${range}) - ${historicalData.length} points`);
         } catch (e) {
           console.warn('Failed to cache asset data in Redis');
         }
@@ -246,9 +600,9 @@ router.get('/:symbol', async (req, res) => {
             const dateStr = date.toISOString().split('T')[0];
             
             await pool.query(
-              `INSERT INTO asset_data (symbol, date, open, high, low, close, volume, adjusted_close)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-               ON CONFLICT (symbol, date) 
+              `INSERT INTO asset_data (symbol, date, timestamp, open, high, low, close, volume, adjusted_close)
+               VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (symbol, date, COALESCE(timestamp, '1970-01-01 00:00:00'::timestamp)) 
                DO UPDATE SET 
                  open = EXCLUDED.open,
                  high = EXCLUDED.high,
@@ -350,9 +704,9 @@ router.get('/:symbol', async (req, res) => {
               
               // Insert or update in database
               await pool.query(
-                `INSERT INTO asset_data (symbol, date, open, high, low, close, volume, adjusted_close)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                 ON CONFLICT (symbol, date) 
+                `INSERT INTO asset_data (symbol, date, timestamp, open, high, low, close, volume, adjusted_close)
+                 VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (symbol, date, COALESCE(timestamp, '1970-01-01 00:00:00'::timestamp)) 
                  DO UPDATE SET 
                    open = EXCLUDED.open,
                    high = EXCLUDED.high,
@@ -390,10 +744,16 @@ router.get('/:symbol', async (req, res) => {
             // If API fails and we have no data, try generating mock data as fallback
             if (historicalData.length === 0 && USE_MOCK_DATA) {
               console.log(`🔄 Generating mock data as fallback for ${symbol}...`);
-              const days = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 30 : 
-                          range === '3M' ? 90 : range === '6M' ? 180 : range === '1Y' ? 365 : 
-                          range === '5Y' ? 1825 : range === '10Y' ? 3650 : 30;
-              const mockHistorical = mockData.generateHistoricalData(symbol, days);
+              let mockHistorical;
+              if (range === '7D') {
+                // For 7D, generate 7 days including weekends with flat prices
+                mockHistorical = mockData.generate7DaysData(symbol);
+              } else {
+                const days = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 30 : 
+                            range === '3M' ? 90 : range === '6M' ? 180 : range === '1Y' ? 365 : 
+                            range === '5Y' ? 1825 : range === '10Y' ? 3650 : 30;
+                mockHistorical = mockData.generateHistoricalData(symbol, days);
+              }
               historicalData = mockHistorical.map(result => ({
                 timestamp: result.timestamp,
                 open: result.open,
@@ -410,10 +770,16 @@ router.get('/:symbol', async (req, res) => {
         // Use DB data if available, even if limited
         // If no DB data and USE_MOCK_DATA, generate mock data
         if (historicalData.length === 0 && USE_MOCK_DATA) {
-          const days = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 30 : 
-                      range === '3M' ? 90 : range === '6M' ? 180 : range === '1Y' ? 365 : 
-                      range === '5Y' ? 1825 : range === '10Y' ? 3650 : 30;
-          const mockHistorical = mockData.generateHistoricalData(symbol, days);
+          let mockHistorical;
+          if (range === '7D') {
+            // For 7D, generate 7 days including weekends with flat prices
+            mockHistorical = mockData.generate7DaysData(symbol);
+          } else {
+            const days = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 30 : 
+                        range === '3M' ? 90 : range === '6M' ? 180 : range === '1Y' ? 365 : 
+                        range === '5Y' ? 1825 : range === '10Y' ? 3650 : 30;
+            mockHistorical = mockData.generateHistoricalData(symbol, days);
+          }
           historicalData = mockHistorical.map(result => ({
             timestamp: result.timestamp,
             open: result.open,
@@ -431,41 +797,101 @@ router.get('/:symbol', async (req, res) => {
 
     // 4. Update or insert asset info
     if (assetInfo) {
+      const { extractTickerSymbol, generateDisplayName } = require('../utils/assetSymbolUtils');
+      const tickerSymbol = extractTickerSymbol(symbol);
+      const displayName = generateDisplayName(symbol, assetInfo.name || symbol);
+      
       await pool.query(
-        `INSERT INTO asset_info (symbol, name, type, exchange, currency, updated_at)
-         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+        `INSERT INTO asset_info (symbol, name, ticker_symbol, display_name, type, exchange, currency, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
          ON CONFLICT (symbol) 
          DO UPDATE SET 
            name = EXCLUDED.name,
+           ticker_symbol = EXCLUDED.ticker_symbol,
+           display_name = EXCLUDED.display_name,
            type = EXCLUDED.type,
            exchange = EXCLUDED.exchange,
            currency = EXCLUDED.currency,
            updated_at = CURRENT_TIMESTAMP`,
         [
           symbol,
-          assetInfo.name || assetInfo.name,
-          assetInfo.type || assetInfo.type,
+          assetInfo.name || symbol,
+          tickerSymbol,
+          displayName,
+          assetInfo.type || 'stock',
           assetInfo.primary_exchange || assetInfo.exchange || assetInfo.market || '',
           assetInfo.currency_name || assetInfo.currency || 'USD'
         ]
       );
     }
 
-    // 5. Get asset info from DB
-    const infoResult = await pool.query(
-      'SELECT *, logo_url, category FROM asset_info WHERE symbol = $1',
-      [symbol]
-    );
-
+    // 5. Get asset info from DB - use stock_data for stocks/ETFs, asset_info for crypto/indices
+    const isCryptoAsset = symbol.startsWith('X:') && symbol.endsWith('USD');
+    const isIndexAsset = symbol.startsWith('^');
+    
+    let assetMetadata = null;
+    
+    if (!isCryptoAsset && !isIndexAsset) {
+      // Stocks/ETFs: Get from stock_data
+      const stockResult = await pool.query(
+        `SELECT 
+          sd.ticker as symbol,
+          sd.name,
+          sd.type,
+          sd.primary_exchange as exchange,
+          sd.currency_name as currency,
+          sd.acronym,
+          ai.logo_url,
+          ai.category,
+          ai.market_cap,
+          ai.pe_ratio,
+          ai.dividend_yield
+        FROM stock_data sd
+        LEFT JOIN asset_info ai ON sd.ticker = ai.symbol
+        WHERE sd.ticker = $1 AND sd.active = true`,
+        [symbol]
+      );
+      
+      if (stockResult.rows.length > 0) {
+        const row = stockResult.rows[0];
+        assetMetadata = {
+          symbol: row.symbol,
+          name: row.name || symbol,
+          type: row.type || 'stock',
+          exchange: row.exchange || '',
+          currency: row.currency || 'USD',
+          logo_url: row.logo_url,
+          category: row.category || (row.type === 'ETF' || row.type === 'ETP' ? 'ETF' : 'Equity'),
+          market_cap: row.market_cap,
+          pe_ratio: row.pe_ratio,
+          dividend_yield: row.dividend_yield
+        };
+      }
+    }
+    
+    // Fallback to asset_info for crypto/indices or if stock_data didn't find it
+    if (!assetMetadata) {
+      const infoResult = await pool.query(
+        'SELECT *, logo_url, category FROM asset_info WHERE symbol = $1',
+        [symbol]
+      );
+      
+      if (infoResult.rows.length > 0) {
+        assetMetadata = infoResult.rows[0];
+      }
+    }
+    
     const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
-    const assetMetadata = infoResult.rows[0] || {
-      symbol,
-      name: symbol,
-      type: 'stock',
-      exchange: '',
-      currency: 'USD',
-      category: null
-    };
+      if (!assetMetadata) {
+      assetMetadata = {
+        symbol,
+        name: symbol,
+        type: isCryptoAsset ? 'crypto' : isIndexAsset ? 'index' : 'stock',
+        exchange: '',
+        currency: 'USD',
+        category: null
+      };
+    }
     
     // Ensure category is set
     const category = assetMetadata.category || normalizeCategory(determineCategory(symbol, assetMetadata.type, assetMetadata.exchange)) || 'Unknown';
@@ -530,7 +956,14 @@ router.get('/:symbol', async (req, res) => {
     });
   } catch (error) {
     console.error('Asset detail error:', error);
-    res.status(500).json({ error: 'Internal server error', message: error.message });
+    console.error('Error stack:', error.stack);
+    console.error('Symbol:', req.params.symbol);
+    console.error('Range:', req.query.range);
+    res.status(500).json({ 
+      error: 'Internal server error', 
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 

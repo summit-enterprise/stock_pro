@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
+import { normalizeLogoUrl } from '@/utils/imageUtils';
 
 interface AssetIconProps {
   symbol: string;
@@ -53,25 +55,32 @@ export default function AssetIcon({
     );
   }
 
+  // Normalize logo URL for Next.js Image component
+  // Ensures GCP URLs use Next.js API route for optimization and caching
+  const normalizedLogoUrl = normalizeLogoUrl(logoUrl);
+
   return (
     <div 
       className={`relative flex items-center justify-center rounded-full overflow-hidden ${className}`}
       style={{ width: size, height: size, minWidth: size, minHeight: size }}
       title={name || symbol}
     >
-      <img
-        src={logoUrl}
-        alt={`${name || symbol} logo`}
-        width={size}
-        height={size}
-        className="object-cover w-full h-full"
-        onError={() => {
-          setImgError(true);
-          setIsLoading(false);
-        }}
-        onLoad={() => setIsLoading(false)}
-        style={{ display: isLoading ? 'none' : 'block' }}
-      />
+      {normalizedLogoUrl && (
+        <Image
+          src={normalizedLogoUrl}
+          alt={`${name || symbol} logo`}
+          width={size}
+          height={size}
+          className="object-cover w-full h-full"
+          onError={() => {
+            setImgError(true);
+            setIsLoading(false);
+          }}
+          onLoad={() => setIsLoading(false)}
+          style={{ display: isLoading ? 'none' : 'block' }}
+          unoptimized={normalizedLogoUrl?.includes('lh3.googleusercontent.com')} // OAuth avatars don't need optimization
+        />
+      )}
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-200 dark:bg-zinc-700">
           <span style={{ fontSize: size * 0.4 }}>⏳</span>

@@ -17,9 +17,11 @@ export default function Sidebar() {
 
   const marketsSubmenu = [
     { icon: '₿', label: 'Crypto', path: '/crypto' },
-    { icon: '📈', label: 'Equities', path: '/equities' },
+    { icon: '📈', label: 'Stocks', path: '/stocks' },
+    { icon: '📊', label: 'ETFs', path: '/etfs' },
     { icon: '⚡', label: 'Commodities', path: '/commodities' },
     { icon: '🎴', label: 'Alternative', path: '/alternative' },
+    { icon: '🔒', label: 'Private Markets', path: '/private-markets' },
   ];
 
   const menuItems = [
@@ -29,6 +31,7 @@ export default function Sidebar() {
     { icon: '💼', label: 'Portfolio', path: '/portfolio' },
     { icon: '📊', label: 'Analytics', path: '/analytics' },
     { icon: '📉', label: 'Charting', path: '/charting' },
+    { icon: '🔒', label: 'Private Markets', path: '/private-markets' },
     { icon: '😨', label: 'Fear/Greed Index', path: '/fear-greed' },
     { icon: '📄', label: 'SEC Filings', path: '/filings' },
     { icon: '🏛️', label: 'Disclosures', path: '/disclosures' },
@@ -115,7 +118,8 @@ export default function Sidebar() {
                   // Markets with submenu
                   const isMarketsActive = pathname === '/markets' || 
                     pathname === '/crypto' || 
-                    pathname === '/equities' || 
+                    pathname === '/stocks' ||
+                    pathname === '/etfs' || 
                     pathname === '/commodities' || 
                     pathname === '/alternative';
                   

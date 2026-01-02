@@ -25,59 +25,130 @@ router.get('/autocomplete', async (req, res) => {
       // First, try to search the database for real assets
       try {
         const searchQuery = `%${query}%`;
+        const queryLower = query.toLowerCase();
+        
+        // Search stocks/ETFs from stock_data and crypto/indices from asset_info
         const dbResult = await pool.query(
-          `SELECT symbol, name, type, category, exchange, currency 
-           FROM asset_info 
-           WHERE (LOWER(symbol) LIKE LOWER($1) OR LOWER(name) LIKE LOWER($1))
+          `-- Search stocks/ETFs from stock_data
+           SELECT 
+             sd.ticker as symbol,
+             sd.name,
+             sd.acronym as ticker_symbol,
+             sd.name as display_name,
+             sd.type,
+             CASE WHEN sd.type IN ('ETF', 'ETP') THEN 'ETF' 
+                  WHEN sd.type IN ('ADRC', 'ADRW', 'ADRR') THEN 'ADR'
+                  ELSE 'Equity' END as category,
+             sd.primary_exchange as exchange,
+             sd.currency_name as currency
+           FROM stock_data sd
+           WHERE sd.active = true
+             AND (
+               LOWER(sd.ticker) LIKE LOWER($1)
+               OR LOWER(sd.name) LIKE LOWER($1)
+               OR LOWER(COALESCE(sd.acronym, '')) LIKE LOWER($1)
+             )
+             -- Exclude fake/mock assets
+             AND sd.name !~* 'Tech Company \d+'
+             AND sd.name !~* 'Finance Company \d+'
+             AND sd.name !~* 'Healthcare Company \d+'
+             AND sd.name !~* 'Consumer Company \d+'
+             AND sd.name !~* 'Industrial Company \d+'
+             AND sd.name !~* 'Energy Company \d+'
+             AND sd.name !~* '^ETF \d+'
+             AND sd.name !~* '^CRYPTO\d+'
+             AND sd.name !~* '^AI \d+ Inc\.?$'
+             AND sd.name !~* '^AI\d+$'
+             AND sd.name !~* '^AA\d+$'
+             AND sd.ticker !~* '^FN[A-Z]\d+$'
+             AND sd.ticker !~* '^HC[A-Z]\d+$'
+             AND sd.ticker !~* '^CS[A-Z]\d+$'
+             AND sd.ticker !~* '^IN[A-Z]\d+$'
+             AND sd.ticker !~* '^EN[A-Z]\d+$'
+           
+           UNION ALL
+           
+           -- Search crypto/indices from asset_info
+           SELECT 
+             ai.symbol,
+             ai.name,
+             ai.ticker_symbol,
+             ai.display_name,
+             ai.type,
+             ai.category,
+             ai.exchange,
+             ai.currency
+           FROM asset_info ai
+           WHERE (
+             LOWER(ai.symbol) LIKE LOWER($1)
+             OR LOWER(ai.name) LIKE LOWER($1)
+             OR LOWER(COALESCE(ai.ticker_symbol, '')) LIKE LOWER($1)
+             OR LOWER(COALESCE(ai.display_name, '')) LIKE LOWER($1)
+           )
+             AND (ai.type = 'crypto' OR ai.symbol LIKE '^%' OR ai.symbol LIKE 'X:%')
+             -- Exclude fake/mock assets
+             AND ai.name !~* 'Tech Company \d+'
+             AND ai.name !~* 'Finance Company \d+'
+             AND ai.name !~* 'Healthcare Company \d+'
+             AND ai.name !~* 'Consumer Company \d+'
+             AND ai.name !~* 'Industrial Company \d+'
+             AND ai.name !~* 'Energy Company \d+'
+             AND ai.name !~* '^ETF \d+'
+             AND ai.name !~* '^CRYPTO\d+'
+             AND ai.name !~* '^AI \d+ Inc\.?$'
+             AND ai.name !~* '^AI\d+$'
+             AND ai.name !~* '^AA\d+$'
+             AND ai.symbol !~* '^FN[A-Z]\d+$'
+             AND ai.symbol !~* '^HC[A-Z]\d+$'
+             AND ai.symbol !~* '^CS[A-Z]\d+$'
+             AND ai.symbol !~* '^IN[A-Z]\d+$'
+             AND ai.symbol !~* '^EN[A-Z]\d+$'
+           
            ORDER BY 
-             CASE WHEN LOWER(symbol) = LOWER($2) THEN 1
-                  WHEN LOWER(symbol) LIKE LOWER($2 || '%') THEN 2
-                  WHEN LOWER(name) LIKE LOWER($2 || '%') THEN 3
-                  ELSE 4 END,
+             -- Exact matches first
+             CASE 
+               WHEN LOWER(COALESCE(ticker_symbol, symbol)) = $2 THEN 1
+               WHEN LOWER(symbol) = $2 THEN 2
+               WHEN LOWER(COALESCE(display_name, name)) = $2 THEN 3
+               -- Starts with matches
+               WHEN LOWER(COALESCE(ticker_symbol, symbol)) LIKE $2 || '%' THEN 4
+               WHEN LOWER(symbol) LIKE $2 || '%' THEN 5
+               WHEN LOWER(COALESCE(display_name, name)) LIKE $2 || '%' THEN 6
+               -- Contains matches
+               ELSE 7
+             END,
              symbol
            LIMIT 10`,
-          [searchQuery, query]
+          [searchQuery, queryLower]
         );
 
-        if (dbResult.rows.length > 0) {
-          const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
-          const results = dbResult.rows.map(row => {
-            const category = normalizeCategory(row.category || determineCategory(row.symbol, row.type, row.exchange) || 'Unknown');
-            const result = {
-              symbol: row.symbol,
-              name: row.name || row.symbol,
-              category: category, // Include category in response
-              market: row.type === 'crypto' ? 'crypto' : row.type === 'index' ? 'indices' : 'stocks',
-              type: row.type === 'crypto' ? 'crypto' : row.type === 'index' ? 'index' : row.type === 'commodity' ? 'commodity' : 'CS',
-              exchange: row.exchange || '',
-              currency: row.currency || 'USD'
-            };
-            
-            // Track search for trending assets (async, don't wait)
-            trendingAssetsService.trackAssetSearch(row.symbol).catch(err => {
-              console.error('Error tracking asset search:', err);
-            });
-            
-            return result;
+        const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
+        const results = dbResult.rows.map(row => {
+          const category = normalizeCategory(row.category || determineCategory(row.symbol, row.type, row.exchange) || 'Unknown');
+          const result = {
+            symbol: row.symbol,
+            name: row.display_name || row.name || row.symbol,
+            ticker: row.ticker_symbol || row.symbol,
+            category: category,
+            market: row.type === 'crypto' ? 'crypto' : row.type === 'index' ? 'indices' : 'stocks',
+            type: row.type === 'crypto' ? 'crypto' : row.type === 'index' ? 'index' : row.type === 'commodity' ? 'commodity' : 'CS',
+            exchange: row.exchange || '',
+            currency: row.currency || 'USD'
+          };
+          
+          // Track search for trending assets (async, don't wait)
+          trendingAssetsService.trackAssetSearch(row.symbol).catch(err => {
+            console.error('Error tracking asset search:', err);
           });
-          return res.json({ results });
-        }
+          
+          return result;
+        });
+        return res.json({ results });
       } catch (dbError) {
         console.error('Database search error:', dbError.message);
-        // Fall through to mock data
+        // Return empty results instead of mock data - only real assets allowed
+        return res.json({ results: [] });
       }
-
-      // Fallback to mock search results if database search fails or returns no results
-      const mockResults = mockData.getMockSearchResults(query);
-      const results = mockResults.map(ticker => ({
-        symbol: ticker.symbol,
-        name: ticker.name,
-        market: ticker.market,
-        type: ticker.type || 'stock',
-        exchange: ticker.exchange,
-        currency: 'USD'
-      }));
-      return res.json({ results });
     }
 
     // Use Polygon.io ticker search API

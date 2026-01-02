@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
+const { getRedisClient } = require('../config/redis');
 const router = express.Router();
 
 // Middleware to verify user token
@@ -24,8 +25,21 @@ const verifyToken = async (req, res, next) => {
 router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT p.symbol, ai.name, ai.type, ai.category, ai.exchange, ai.logo_url, p.shares_owned, p.avg_share_price, p.updated_at
+      `SELECT 
+        p.symbol,
+        COALESCE(sd.name, ai.name) as name,
+        COALESCE(sd.type, ai.type) as type,
+        COALESCE(ai.category,
+          CASE WHEN sd.type IN ('ETF', 'ETP') THEN 'ETF'
+               WHEN sd.type IN ('ADRC', 'ADRW', 'ADRR') THEN 'ADR'
+               ELSE 'Equity' END) as category,
+        COALESCE(sd.primary_exchange, ai.exchange) as exchange,
+        ai.logo_url,
+        p.shares_owned,
+        p.avg_share_price,
+        p.updated_at
        FROM portfolio p
+       LEFT JOIN stock_data sd ON p.symbol = sd.ticker AND sd.active = true
        LEFT JOIN asset_info ai ON p.symbol = ai.symbol
        WHERE p.user_id = $1
        ORDER BY p.updated_at DESC`,
@@ -33,6 +47,7 @@ router.get('/', verifyToken, async (req, res) => {
     );
 
     // Fetch current prices for portfolio items
+    const redisClient = await getRedisClient();
     const items = await Promise.all(
       result.rows.map(async (row) => {
         try {
@@ -42,30 +57,189 @@ router.get('/', verifyToken, async (req, res) => {
           let change = 0;
           let changePercent = 0;
 
-          if (USE_MOCK_DATA) {
-            // Use mock data
-            const mockData = require('../services/utils/mockData');
-            const priceData = mockData.getCurrentPrice(row.symbol);
-            currentPrice = priceData.price;
-            change = priceData.change;
-            changePercent = priceData.changePercent;
-          } else if (process.env.POLYGON_API_KEY) {
-            const axios = require('axios');
-            const prevUrl = `https://api.polygon.io/v2/aggs/ticker/${row.symbol}/prev?apiKey=${process.env.POLYGON_API_KEY}`;
-            const response = await axios.get(prevUrl, { timeout: 5000 });
-            
-            if (response.data && response.data.results && response.data.results.length > 0) {
-              const data = response.data.results[0];
-              // Get previous close for change calculation
-              const dbResult = await pool.query(
-                'SELECT close FROM asset_data WHERE symbol = $1 ORDER BY date DESC LIMIT 1',
-                [row.symbol]
-              );
+          // First, try to get latest price from Redis cache
+          if (redisClient && redisClient.isOpen) {
+            try {
+              const cacheKey = `latest_price:${row.symbol}`;
+              const cachedPrice = await redisClient.get(cacheKey);
               
-              const previousClose = dbResult.rows[0]?.close || data.c;
-              currentPrice = data.c;
-              change = currentPrice - previousClose;
-              changePercent = previousClose !== 0 ? ((change / previousClose) * 100) : 0;
+              if (cachedPrice) {
+                const priceData = JSON.parse(cachedPrice);
+                currentPrice = parseFloat(priceData.price) || 0;
+                change = parseFloat(priceData.change) || 0;
+                changePercent = parseFloat(priceData.changePercent) || 0;
+                
+                // If we got a valid price from cache, skip fallback
+                if (currentPrice > 0) {
+                  // Continue to calculation below
+                }
+              }
+            } catch (redisError) {
+              console.warn(`Redis cache read failed for ${row.symbol}, falling back to API/mock`);
+            }
+          }
+
+          // If cache miss or price is still 0, fetch from API or use mock data
+          if (currentPrice === 0 || isNaN(currentPrice)) {
+            if (USE_MOCK_DATA) {
+              // Use mock data - check if we have a cached mock price first
+              const mockData = require('../services/utils/mockData');
+              
+              // Try to get cached mock price from Redis (to keep it consistent)
+              if (redisClient && redisClient.isOpen) {
+                try {
+                  const mockCacheKey = `mock_price:${row.symbol}`;
+                  const cachedMockPrice = await redisClient.get(mockCacheKey);
+                  
+                  if (cachedMockPrice) {
+                    const mockPriceData = JSON.parse(cachedMockPrice);
+                    currentPrice = parseFloat(mockPriceData.price) || 0;
+                    change = parseFloat(mockPriceData.change) || 0;
+                    changePercent = parseFloat(mockPriceData.changePercent) || 0;
+                  } else {
+                    // Generate new mock price and cache it
+                    currentPrice = mockData.getCurrentPrice(row.symbol);
+                    const prevClose = mockData.getPreviousClose(row.symbol);
+                    change = currentPrice - prevClose;
+                    changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                    
+                    // Cache for 10 minutes to keep prices consistent
+                    await redisClient.setEx(mockCacheKey, 600, JSON.stringify({
+                      price: currentPrice,
+                      change: change,
+                      changePercent: changePercent,
+                    }));
+                  }
+                } catch (redisError) {
+                  // If Redis fails, just use mock data directly
+                  currentPrice = mockData.getCurrentPrice(row.symbol);
+                  const prevClose = mockData.getPreviousClose(row.symbol);
+                  change = currentPrice - prevClose;
+                  changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                }
+              } else {
+                // No Redis, use mock data directly
+                currentPrice = mockData.getCurrentPrice(row.symbol);
+                const prevClose = mockData.getPreviousClose(row.symbol);
+                change = currentPrice - prevClose;
+                changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+              }
+            } else if (process.env.POLYGON_API_KEY) {
+              try {
+                const axios = require('axios');
+                const prevUrl = `https://api.polygon.io/v2/aggs/ticker/${row.symbol}/prev?apiKey=${process.env.POLYGON_API_KEY}`;
+                const response = await axios.get(prevUrl, { timeout: 5000 });
+                
+                if (response.data && response.data.results && response.data.results.length > 0) {
+                  const data = response.data.results[0];
+                  // Get previous close for change calculation
+                  const dbResult = await pool.query(
+                    'SELECT close FROM asset_data WHERE symbol = $1 ORDER BY date DESC LIMIT 1',
+                    [row.symbol]
+                  );
+                  
+                  const previousClose = dbResult.rows[0]?.close || data.c;
+                  currentPrice = data.c;
+                  change = currentPrice - previousClose;
+                  changePercent = previousClose !== 0 ? ((change / previousClose) * 100) : 0;
+                }
+              } catch (apiError) {
+                console.warn(`Polygon API error for ${row.symbol}, trying database fallback:`, apiError.message);
+              }
+            }
+            
+            // Final fallback: try to get latest price from database if still 0
+            if (currentPrice === 0) {
+              try {
+                const dbResult = await pool.query(
+                  'SELECT close FROM asset_data WHERE symbol = $1 ORDER BY date DESC, timestamp DESC NULLS LAST LIMIT 1',
+                  [row.symbol]
+                );
+                
+                if (dbResult.rows.length > 0) {
+                  currentPrice = parseFloat(dbResult.rows[0].close) || 0;
+                  // For database fallback, we don't have change data, so set to 0
+                  change = 0;
+                  changePercent = 0;
+                } else {
+                  // If no database data, use mock data as last resort (with caching)
+                  const mockData = require('../services/utils/mockData');
+                  
+                  if (redisClient && redisClient.isOpen) {
+                    try {
+                      const mockCacheKey = `mock_price:${row.symbol}`;
+                      const cachedMockPrice = await redisClient.get(mockCacheKey);
+                      
+                      if (cachedMockPrice) {
+                        const mockPriceData = JSON.parse(cachedMockPrice);
+                        currentPrice = parseFloat(mockPriceData.price) || 0;
+                        change = parseFloat(mockPriceData.change) || 0;
+                        changePercent = parseFloat(mockPriceData.changePercent) || 0;
+                      } else {
+                        currentPrice = mockData.getCurrentPrice(row.symbol);
+                        const prevClose = mockData.getPreviousClose(row.symbol);
+                        change = currentPrice - prevClose;
+                        changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                        
+                        await redisClient.setEx(mockCacheKey, 600, JSON.stringify({
+                          price: currentPrice,
+                          change: change,
+                          changePercent: changePercent,
+                        }));
+                      }
+                    } catch (redisError) {
+                      currentPrice = mockData.getCurrentPrice(row.symbol);
+                      const prevClose = mockData.getPreviousClose(row.symbol);
+                      change = currentPrice - prevClose;
+                      changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                    }
+                  } else {
+                    currentPrice = mockData.getCurrentPrice(row.symbol);
+                    const prevClose = mockData.getPreviousClose(row.symbol);
+                    change = currentPrice - prevClose;
+                    changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                  }
+                }
+              } catch (dbError) {
+                console.warn(`Database error for ${row.symbol}, using mock data:`, dbError.message);
+                // Last resort: use mock data (with caching)
+                const mockData = require('../services/utils/mockData');
+                
+                if (redisClient && redisClient.isOpen) {
+                  try {
+                    const mockCacheKey = `mock_price:${row.symbol}`;
+                    const cachedMockPrice = await redisClient.get(mockCacheKey);
+                    
+                    if (cachedMockPrice) {
+                      const mockPriceData = JSON.parse(cachedMockPrice);
+                      currentPrice = parseFloat(mockPriceData.price) || 0;
+                      change = parseFloat(mockPriceData.change) || 0;
+                      changePercent = parseFloat(mockPriceData.changePercent) || 0;
+                    } else {
+                      currentPrice = mockData.getCurrentPrice(row.symbol);
+                      const prevClose = mockData.getPreviousClose(row.symbol);
+                      change = currentPrice - prevClose;
+                      changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                      
+                      await redisClient.setEx(mockCacheKey, 600, JSON.stringify({
+                        price: currentPrice,
+                        change: change,
+                        changePercent: changePercent,
+                      }));
+                    }
+                  } catch (redisError) {
+                    currentPrice = mockData.getCurrentPrice(row.symbol);
+                    const prevClose = mockData.getPreviousClose(row.symbol);
+                    change = currentPrice - prevClose;
+                    changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                  }
+                } else {
+                  currentPrice = mockData.getCurrentPrice(row.symbol);
+                  const prevClose = mockData.getPreviousClose(row.symbol);
+                  change = currentPrice - prevClose;
+                  changePercent = prevClose !== 0 ? ((change / prevClose) * 100) : 0;
+                }
+              }
             }
           }
 
@@ -75,6 +249,11 @@ router.get('/', verifyToken, async (req, res) => {
           const totalCost = avgSharePrice * sharesOwned;
           const profitLoss = totalMarketValue - totalCost;
           const profitLossPercent = totalCost !== 0 ? ((profitLoss / totalCost) * 100) : 0;
+
+          // Debug logging for zero prices
+          if (currentPrice === 0 && sharesOwned > 0) {
+            console.warn(`⚠️  Zero price for ${row.symbol} (shares: ${sharesOwned}, cost: ${avgSharePrice})`);
+          }
 
           const { normalizeCategory, determineCategory } = require('../utils/categoryUtils');
           const category = row.category || normalizeCategory(determineCategory(row.symbol, row.type, row.exchange)) || 'Unknown';
@@ -176,15 +355,20 @@ router.post('/', verifyToken, async (req, res) => {
       }
       
       const category = normalizeCategory(determineCategory(symbol, assetType, exchange)) || 'Unknown';
+      const { extractTickerSymbol, generateDisplayName } = require('../utils/assetSymbolUtils');
+      const tickerSymbol = extractTickerSymbol(symbol);
+      const displayName = generateDisplayName(symbol, assetName);
       
       await pool.query(
-        `INSERT INTO asset_info (symbol, name, type, category, exchange, currency, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+        `INSERT INTO asset_info (symbol, name, ticker_symbol, display_name, type, category, exchange, currency, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
          ON CONFLICT (symbol) DO UPDATE SET 
            category = EXCLUDED.category,
+           ticker_symbol = EXCLUDED.ticker_symbol,
+           display_name = EXCLUDED.display_name,
            type = EXCLUDED.type,
            exchange = EXCLUDED.exchange`,
-        [symbol, assetName, assetType, category, exchange, 'USD']
+        [symbol, assetName, tickerSymbol, displayName, assetType, category, exchange, 'USD']
       );
     }
 
@@ -310,6 +494,7 @@ router.get('/summary', verifyToken, async (req, res) => {
     }
 
     const axios = require('axios');
+    const redisClient = await getRedisClient();
     let totalValue = 0;
     let totalCost = 0;
     let todayChange = 0;
@@ -320,17 +505,90 @@ router.get('/summary', verifyToken, async (req, res) => {
     for (const holding of holdings.rows) {
       try {
         let currentPrice = 0;
+        let priceChange = 0;
         
-        if (USE_MOCK_DATA) {
-          // Use mock data
-          const priceData = mockData.getCurrentPrice(holding.symbol);
-          currentPrice = priceData.price;
-        } else if (process.env.POLYGON_API_KEY) {
-          const prevUrl = `https://api.polygon.io/v2/aggs/ticker/${holding.symbol}/prev?apiKey=${process.env.POLYGON_API_KEY}`;
-          const response = await axios.get(prevUrl, { timeout: 5000 });
-          
-          if (response.data && response.data.results && response.data.results.length > 0) {
-            currentPrice = response.data.results[0].c;
+        // First, try to get latest price from Redis cache
+        if (redisClient && redisClient.isOpen) {
+          try {
+            const cacheKey = `latest_price:${holding.symbol}`;
+            const cachedPrice = await redisClient.get(cacheKey);
+            
+            if (cachedPrice) {
+              const priceData = JSON.parse(cachedPrice);
+              currentPrice = parseFloat(priceData.price) || 0;
+              priceChange = parseFloat(priceData.change) || 0;
+            }
+          } catch (redisError) {
+            console.warn(`Redis cache read failed for ${holding.symbol}, falling back to API/mock`);
+          }
+        }
+
+        // If cache miss, fetch from API or use mock data
+        if (currentPrice === 0) {
+          if (USE_MOCK_DATA) {
+            // Use mock data - check if we have a cached mock price first
+            if (redisClient && redisClient.isOpen) {
+              try {
+                const mockCacheKey = `mock_price:${holding.symbol}`;
+                const cachedMockPrice = await redisClient.get(mockCacheKey);
+                
+                if (cachedMockPrice) {
+                  const mockPriceData = JSON.parse(cachedMockPrice);
+                  currentPrice = parseFloat(mockPriceData.price) || 0;
+                  priceChange = parseFloat(mockPriceData.change) || 0;
+                } else {
+                  // Generate new mock price and cache it
+                  currentPrice = mockData.getCurrentPrice(holding.symbol);
+                  const prevClose = mockData.getPreviousClose(holding.symbol);
+                  priceChange = currentPrice - prevClose;
+                  
+                  // Cache for 10 minutes to keep prices consistent
+                  await redisClient.setEx(mockCacheKey, 600, JSON.stringify({
+                    price: currentPrice,
+                    change: priceChange,
+                    changePercent: prevClose !== 0 ? ((priceChange / prevClose) * 100) : 0,
+                  }));
+                }
+              } catch (redisError) {
+                // If Redis fails, just use mock data directly
+                currentPrice = mockData.getCurrentPrice(holding.symbol);
+                const prevClose = mockData.getPreviousClose(holding.symbol);
+                priceChange = currentPrice - prevClose;
+              }
+            } else {
+              // No Redis, use mock data directly
+              currentPrice = mockData.getCurrentPrice(holding.symbol);
+              const prevClose = mockData.getPreviousClose(holding.symbol);
+              priceChange = currentPrice - prevClose;
+            }
+          } else if (process.env.POLYGON_API_KEY) {
+            const prevUrl = `https://api.polygon.io/v2/aggs/ticker/${holding.symbol}/prev?apiKey=${process.env.POLYGON_API_KEY}`;
+            const response = await axios.get(prevUrl, { timeout: 5000 });
+            
+            if (response.data && response.data.results && response.data.results.length > 0) {
+              currentPrice = response.data.results[0].c;
+              
+              // Get yesterday's close for today's change
+              const dbResult = await pool.query(
+                'SELECT close FROM asset_data WHERE symbol = $1 ORDER BY date DESC LIMIT 1',
+                [holding.symbol]
+              );
+              
+              if (dbResult.rows[0]) {
+                const yesterdayClose = dbResult.rows[0].close;
+                priceChange = currentPrice - yesterdayClose;
+              }
+            }
+          } else {
+            // Fallback: try to get latest price from database
+            const dbResult = await pool.query(
+              'SELECT close FROM asset_data WHERE symbol = $1 ORDER BY date DESC, timestamp DESC NULLS LAST LIMIT 1',
+              [holding.symbol]
+            );
+            
+            if (dbResult.rows.length > 0) {
+              currentPrice = parseFloat(dbResult.rows[0].close) || 0;
+            }
           }
         }
 
@@ -341,22 +599,7 @@ router.get('/summary', verifyToken, async (req, res) => {
           
           totalValue += value;
           totalCost += cost;
-
-          // Get yesterday's close for today's change
-          const dbResult = await pool.query(
-            'SELECT close FROM asset_data WHERE symbol = $1 ORDER BY date DESC LIMIT 1',
-            [holding.symbol]
-          );
-          
-          if (dbResult.rows[0]) {
-            const yesterdayClose = dbResult.rows[0].close;
-            const priceChange = currentPrice - yesterdayClose;
-            todayChange += priceChange * shares;
-          } else if (USE_MOCK_DATA) {
-            // For mock data, calculate a small change
-            const priceData = mockData.getCurrentPrice(holding.symbol);
-            todayChange += priceData.change * shares;
-          }
+          todayChange += priceChange * shares;
         }
       } catch (error) {
         console.error(`Error fetching price for ${holding.symbol}:`, error.message);

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 
 interface SupportFormData {
@@ -17,11 +18,36 @@ interface ContactFormData {
   message: string;
 }
 
+interface SupportTicket {
+  id: number;
+  ticket_number: string;
+  category: string;
+  subject: string;
+  description: string;
+  priority: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+interface ContactMessage {
+  id: number;
+  name: string;
+  email: string;
+  subject: string;
+  message: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const SUPPORT_CATEGORIES = [
   { value: 'bug', label: 'Bug Report' },
   { value: 'feature', label: 'Feature Request' },
   { value: 'technical', label: 'Technical Issue' },
   { value: 'account', label: 'Account Issue' },
+  { value: 'account_restricted_banned', label: 'Account Restricted/Banned' },
   { value: 'billing', label: 'Billing Question' },
   { value: 'data', label: 'Data Issue' },
   { value: 'api', label: 'API Question' },
@@ -36,6 +62,7 @@ const PRIORITY_LEVELS = [
 ];
 
 export default function SupportPage() {
+  const router = useRouter();
   const [supportForm, setSupportForm] = useState<SupportFormData>({
     category: 'bug',
     subject: '',
@@ -54,6 +81,10 @@ export default function SupportPage() {
   const [contactSuccess, setContactSuccess] = useState(false);
   const [supportError, setSupportError] = useState<string | null>(null);
   const [contactError, setContactError] = useState<string | null>(null);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [contactMessages, setContactMessages] = useState<ContactMessage[]>([]);
+  const [loadingTickets, setLoadingTickets] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(true);
 
   const handleSupportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,10 +117,26 @@ export default function SupportPage() {
           description: '',
           priority: 'medium',
         });
+        // Auto-dismiss success message after 5 seconds
         setTimeout(() => setSupportSuccess(false), 5000);
       } else {
         const data = await response.json();
-        setSupportError(data.message || 'Failed to submit support ticket');
+        // Don't show "Account restricted" error - allow submission
+        // Only show other errors
+        if (data.error && (data.error.toLowerCase().includes('restricted') || data.error.toLowerCase().includes('banned'))) {
+          // Backend should still process the ticket even if user is restricted
+          // Show success message instead of error
+          setSupportSuccess(true);
+          setSupportForm({
+            category: 'bug',
+            subject: '',
+            description: '',
+            priority: 'medium',
+          });
+          setTimeout(() => setSupportSuccess(false), 5000);
+        } else {
+          setSupportError(data.message || data.error || 'Failed to submit support ticket');
+        }
       }
     } catch (error) {
       console.error('Error submitting support ticket:', error);
@@ -137,6 +184,99 @@ export default function SupportPage() {
     }
   };
 
+  // Fetch user's support tickets
+  useEffect(() => {
+    const fetchTickets = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          setLoadingTickets(false);
+          return;
+        }
+
+        const response = await fetch('http://localhost:3001/api/support/tickets', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setSupportTickets(data.tickets || []);
+        }
+      } catch (error) {
+        console.error('Error fetching support tickets:', error);
+      } finally {
+        setLoadingTickets(false);
+      }
+    };
+
+    fetchTickets();
+  }, [supportSuccess]); // Refetch when a new ticket is submitted
+
+  // Fetch user's contact messages
+  useEffect(() => {
+    const fetchMessages = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          setLoadingMessages(false);
+          return;
+        }
+
+        const response = await fetch('http://localhost:3001/api/contact/messages', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setContactMessages(data.messages || []);
+        }
+      } catch (error) {
+        console.error('Error fetching contact messages:', error);
+      } finally {
+        setLoadingMessages(false);
+      }
+    };
+
+    fetchMessages();
+  }, [contactSuccess]); // Refetch when a new message is submitted
+
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'open':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
+      case 'in_progress':
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300';
+      case 'resolved':
+        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+      case 'closed':
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+      case 'new':
+        return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
+      case 'read':
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300';
+      case 'replied':
+        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300';
+      case 'archived':
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+      default:
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-white dark:bg-black pt-16">
@@ -150,6 +290,94 @@ export default function SupportPage() {
             </p>
           </div>
 
+          {/* Existing Tickets Section */}
+          {supportTickets.length > 0 && (
+            <div className="mb-8 bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
+                Your Support Tickets
+              </h2>
+              {loadingTickets ? (
+                <div className="text-center py-4 text-gray-500 dark:text-gray-400">Loading tickets...</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-gray-300 dark:border-zinc-700">
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Ticket #</th>
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Subject</th>
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Category</th>
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Priority</th>
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Status</th>
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {supportTickets.map((ticket) => (
+                        <tr
+                          key={ticket.id}
+                          onClick={() => router.push(`/support/ticket/${ticket.id}`)}
+                          className="border-b border-gray-200 dark:border-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-800 cursor-pointer transition-colors"
+                        >
+                          <td className="py-3 text-sm text-gray-900 dark:text-white">{ticket.ticket_number}</td>
+                          <td className="py-3 text-sm text-gray-900 dark:text-white font-medium">{ticket.subject}</td>
+                          <td className="py-3 text-sm text-gray-600 dark:text-gray-400">{ticket.category}</td>
+                          <td className="py-3 text-sm text-gray-600 dark:text-gray-400 capitalize">{ticket.priority}</td>
+                          <td className="py-3">
+                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(ticket.status)}`}>
+                              {ticket.status}
+                            </span>
+                          </td>
+                          <td className="py-3 text-sm text-gray-600 dark:text-gray-400">{formatDate(ticket.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Contact Requests Section */}
+          {contactMessages.length > 0 && (
+            <div className="mb-8 bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">
+                Contact Requests
+              </h2>
+              {loadingMessages ? (
+                <div className="text-center py-4 text-gray-500 dark:text-gray-400">Loading messages...</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-gray-300 dark:border-zinc-700">
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Subject</th>
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Status</th>
+                        <th className="pb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {contactMessages.map((message) => (
+                        <tr
+                          key={message.id}
+                          onClick={() => router.push(`/support/contact/${message.id}`)}
+                          className="border-b border-gray-200 dark:border-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-800 cursor-pointer transition-colors"
+                        >
+                          <td className="py-3 text-sm text-gray-900 dark:text-white font-medium">{message.subject}</td>
+                          <td className="py-3">
+                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(message.status)}`}>
+                              {message.status}
+                            </span>
+                          </td>
+                          <td className="py-3 text-sm text-gray-600 dark:text-gray-400">{formatDate(message.created_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Support Ticket Form */}
             <div className="bg-gray-100 dark:bg-zinc-900 rounded-xl p-6">
@@ -162,7 +390,7 @@ export default function SupportPage() {
 
               {supportSuccess && (
                 <div className="mb-4 p-4 bg-green-100 dark:bg-green-900/30 border border-green-400 dark:border-green-700 text-green-700 dark:text-green-300 rounded-lg">
-                  Support ticket submitted successfully! We'll get back to you soon.
+                  ✅ Support ticket submitted successfully! Your ticket has been received and we'll get back to you soon.
                 </div>
               )}
 

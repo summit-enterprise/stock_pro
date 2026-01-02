@@ -42,11 +42,14 @@ interface PortfolioPerformanceChartProps {
 
 const TIME_RANGES = [
   { label: '1 Day', value: '1D' },
-  { label: '1 Week', value: '1W' },
+  { label: '7 Days', value: '7D' },
   { label: '1 Month', value: '1M' },
   { label: '3 Months', value: '3M' },
   { label: '6 Months', value: '6M' },
-  { label: '1 Year', value: '1Y' },
+  { label: 'YTD', value: 'YTD' },
+  { label: '3 Years', value: '3Y' },
+  { label: '5 Years', value: '5Y' },
+  { label: 'MAX', value: 'MAX' },
 ];
 
 const CHART_TYPES = [
@@ -189,6 +192,20 @@ export default function PortfolioPerformanceChart({ token, portfolioItems, onSel
   }, [isPositionDropdownOpen]);
 
   const fetchPerformanceData = async () => {
+    // Check if user is banned/restricted before fetching
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      try {
+        const parsedUser = JSON.parse(userData);
+        if (parsedUser.is_banned || parsedUser.is_restricted) {
+          setLoading(false);
+          return; // Don't fetch data for banned/restricted users
+        }
+      } catch (e) {
+        // Continue if parsing fails
+      }
+    }
+
     setLoading(true);
     try {
       const params = new URLSearchParams();
@@ -213,6 +230,12 @@ export default function PortfolioPerformanceChart({ token, portfolioItems, onSel
           },
         }
       );
+
+      if (response.status === 403) {
+        // User is banned/restricted, don't process response
+        setLoading(false);
+        return;
+      }
 
       if (response.ok) {
         const data = await response.json();

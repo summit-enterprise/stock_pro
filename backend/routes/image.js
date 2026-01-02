@@ -123,16 +123,59 @@ router.get(/^\/gcp\/(.+)$/, async (req, res) => {
     const format = req.query.format || 'webp';
 
     // Get signed URL for private file (valid for 1 hour)
-    const signedUrlResult = await storageService.getSignedUrl(filePath, {
-      expires: Date.now() + 60 * 60 * 1000, // 1 hour
-    });
-
-    // Fetch the image from GCP using signed URL
-    const imageResponse = await axios.get(signedUrlResult.url, {
-      responseType: 'arraybuffer',
-    });
+    // Use environment-specific bucket (local/dev/prod)
+    const { getBucketName, getCurrentEnvironment } = require('../utils/bucketConfig');
+    const bucketName = getBucketName();
+    const currentEnv = getCurrentEnvironment();
     
-    const imageBuffer = Buffer.from(imageResponse.data);
+    console.log(`[IMAGE] Serving GCP image from ${currentEnv} environment, bucket: ${bucketName}, path: ${filePath}`);
+    
+    let imageBuffer;
+    
+    try {
+      // Try to get signed URL and fetch from GCP
+      const signedUrlResult = await storageService.getSignedUrl(filePath, {
+        bucket: bucketName,
+        expires: Date.now() + 60 * 60 * 1000, // 1 hour
+      });
+
+      // Fetch the image from GCP using signed URL
+      const imageResponse = await axios.get(signedUrlResult.url, {
+        responseType: 'arraybuffer',
+        timeout: 10000, // 10 second timeout
+      });
+      
+      imageBuffer = Buffer.from(imageResponse.data);
+    } catch (signError) {
+      // If signed URL generation fails, try to read directly from bucket
+      // This works if the bucket has public read access or if we have proper credentials
+      console.warn(`Failed to generate signed URL for ${filePath}, trying direct read:`, signError.message);
+      
+      try {
+        const { getBucket } = require('../services/infrastructure/googleCloudService');
+        const bucket = await getBucket(bucketName);
+        const file = bucket.file(filePath);
+        
+        // Check if file exists
+        const [exists] = await file.exists();
+        if (!exists) {
+          return res.status(404).json({ error: 'Image not found' });
+        }
+        
+        // Try to download directly (works if bucket is public or we have read permissions)
+        const [fileBuffer] = await file.download();
+        imageBuffer = fileBuffer;
+      } catch (directReadError) {
+        console.error(`Failed to read file directly from bucket: ${directReadError.message}`);
+        // If both methods fail, return error
+          return res.status(500).json({ 
+            error: 'Failed to retrieve image from GCP',
+            message: 'Please ensure GCP credentials are properly configured. ' +
+                     'Set GOOGLE_APPLICATION_CREDENTIALS to service account key file path. ' +
+                     'Service Account: stock-pro-svc@project-finance-482417.iam.gserviceaccount.com'
+          });
+      }
+    }
 
     // Resize if requested
     let processedBuffer = imageBuffer;
@@ -154,11 +197,12 @@ router.get(/^\/gcp\/(.+)$/, async (req, res) => {
     }
 
     res.setHeader('Content-Type', `image/${format}`);
-    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // Cache for 1 year (images are immutable)
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.send(processedBuffer);
   } catch (error) {
     console.error('Error serving GCP image:', error);
-    res.status(500).json({ error: 'Failed to serve image' });
+    res.status(500).json({ error: 'Failed to serve image', message: error.message });
   }
 });
 

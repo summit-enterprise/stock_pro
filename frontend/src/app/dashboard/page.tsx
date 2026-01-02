@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import SearchBar from '@/components/SearchBar';
 import MarketTiles from '@/components/MarketTiles';
-import MarketChart from '@/components/MarketChart';
+import UnifiedPriceChart from '@/components/UnifiedPriceChart';
 import WatchlistSection from '@/components/WatchlistSection';
 import MarketMovers from '@/components/MarketMovers';
 import PortfolioSummary from '@/components/PortfolioSummary';
 import MarketNews from '@/components/MarketNews';
 import TrendingAssets from '@/components/TrendingAssets';
+import GainersLosersCards from '@/components/GainersLosersCards';
 
 interface User {
   id: number;
@@ -37,37 +38,106 @@ export default function Dashboard() {
   const router = useRouter();
 
   useEffect(() => {
-    // Check if user is logged in
+    // Check if user is logged in and verify status with backend
     const token = localStorage.getItem('token');
     const userData = localStorage.getItem('user');
 
     if (!token || !userData) {
       // Not logged in, redirect to home
-      router.push('/');
+      router.replace('/');
       return;
     }
 
-    try {
-      const parsedUser = JSON.parse(userData);
-      setUser(parsedUser);
-    } catch (error) {
-      console.error('Error parsing user data:', error);
-      router.push('/');
-    } finally {
-      setLoading(false);
-    }
+    const checkUserStatus = async () => {
+      try {
+        const parsedUser = JSON.parse(userData);
+        
+        // Verify user status with backend to get latest status
+        try {
+          const response = await fetch('http://localhost:3001/api/user/profile', {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.user) {
+              // Update localStorage with fresh user data
+              localStorage.setItem('user', JSON.stringify(data.user));
+              
+              // Check if user is banned or restricted - redirect immediately before rendering
+              if (data.user.is_banned || data.user.is_restricted) {
+                // Redirect to restricted page immediately
+                router.replace('/restricted');
+                return;
+              }
+              
+              setUser(data.user);
+              setLoading(false);
+              return;
+            }
+          } else if (response.status === 403) {
+            // User is banned/restricted
+            router.replace('/restricted');
+            return;
+          }
+        } catch (fetchError) {
+          console.error('Error fetching user profile:', fetchError);
+          // Fall through to use cached data
+        }
+        
+        // Fallback to cached data if API call fails
+        // Check if user is banned or restricted - redirect immediately before rendering
+        if (parsedUser.is_banned || parsedUser.is_restricted) {
+          // Redirect to restricted page immediately
+          router.replace('/restricted');
+          return;
+        }
+        
+        setUser(parsedUser);
+        setLoading(false);
+      } catch (error) {
+        console.error('Error parsing user data:', error);
+        router.replace('/');
+      }
+    };
+
+    checkUserStatus();
   }, [router]);
 
   // Fetch market tiles and set default selection (S&P 500)
   useEffect(() => {
+    // Don't fetch if user is banned/restricted
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      try {
+        const parsedUser = JSON.parse(userData);
+      if (parsedUser.is_banned || parsedUser.is_restricted) {
+          return; // Don't fetch data for banned/restricted users
+        }
+      } catch (e) {
+        // Continue if parsing fails
+      }
+    }
+
     const fetchMarketData = async () => {
       try {
         const token = localStorage.getItem('token');
+        if (!token) return;
+
         const response = await fetch('http://localhost:3001/api/market/overview', {
           headers: {
             'Authorization': token ? `Bearer ${token}` : '',
           },
         });
+        
+        if (response.status === 403) {
+          // User is banned/restricted, redirect
+          router.push('/restricted');
+          return;
+        }
+        
         if (response.ok) {
           const data = await response.json();
           const tiles = data.tiles || [];
@@ -92,22 +162,20 @@ export default function Dashboard() {
     };
 
     fetchMarketData();
-  }, []);
+  }, [router, selectedTile]);
 
   const handleTileSelect = (tile: SelectedMarketTile) => {
     setSelectedTile(tile);
   };
 
-  if (loading) {
+  // Show loading state while checking user status
+  // Don't render anything until we confirm user is not banned/restricted
+  if (loading || !user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-black pt-16">
+      <div className="min-h-screen flex items-center justify-center bg-white dark:bg-black">
         <p className="text-gray-600 dark:text-gray-400">Loading...</p>
       </div>
     );
-  }
-
-  if (!user) {
-    return null;
   }
 
   return (
@@ -140,14 +208,16 @@ export default function Dashboard() {
             {/* Market Chart - shown above tiles */}
             {selectedTile && (
               <div className="mb-6">
-                <MarketChart
+                <UnifiedPriceChart
                   symbol={selectedTile.symbol}
                   name={selectedTile.name}
                   currentPrice={selectedTile.price}
                   change={selectedTile.change}
                   changePercent={selectedTile.changePercent}
-                  category={selectedTile.category}
                   isDarkMode={typeof window !== 'undefined' && document.documentElement.classList.contains('dark')}
+                  showTimeRangeSelector={true}
+                  showPriceInfo={true}
+                  height={400}
                 />
               </div>
             )}
@@ -163,6 +233,11 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <WatchlistSection />
             <PortfolioSummary />
+          </div>
+
+          {/* Gainers & Losers Cards */}
+          <div className="mb-6">
+            <GainersLosersCards />
           </div>
 
           {/* Market Movers */}

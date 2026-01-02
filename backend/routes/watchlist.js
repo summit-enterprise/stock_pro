@@ -24,8 +24,18 @@ const verifyToken = async (req, res, next) => {
 router.get('/', verifyToken, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT w.symbol, ai.name, ai.type, ai.category, ai.exchange, ai.logo_url
+      `SELECT 
+        w.symbol,
+        COALESCE(sd.name, ai.name) as name,
+        COALESCE(sd.type, ai.type) as type,
+        COALESCE(ai.category, 
+          CASE WHEN sd.type IN ('ETF', 'ETP') THEN 'ETF'
+               WHEN sd.type IN ('ADRC', 'ADRW', 'ADRR') THEN 'ADR'
+               ELSE 'Equity' END) as category,
+        COALESCE(sd.primary_exchange, ai.exchange) as exchange,
+        ai.logo_url
        FROM watchlist w
+       LEFT JOIN stock_data sd ON w.symbol = sd.ticker AND sd.active = true
        LEFT JOIN asset_info ai ON w.symbol = ai.symbol
        WHERE w.user_id = $1
        ORDER BY w.added_at DESC`,
@@ -147,20 +157,38 @@ router.post('/', verifyToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found', message: 'User account does not exist' });
     }
 
-    // Ensure asset_info exists for this symbol
-    const assetCheck = await pool.query('SELECT symbol FROM asset_info WHERE symbol = $1', [symbol]);
-    if (assetCheck.rows.length === 0) {
-      // Create asset_info entry if it doesn't exist
-      const { determineCategory, normalizeCategory } = require('../utils/categoryUtils');
-      const exchange = 'NYSE'; // Default exchange
-      const category = normalizeCategory(determineCategory(symbol, 'stock', exchange)) || 'Unknown';
-      
-      await pool.query(
-        `INSERT INTO asset_info (symbol, name, type, category, exchange, currency, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-         ON CONFLICT (symbol) DO UPDATE SET category = EXCLUDED.category`,
-        [symbol, symbol, 'stock', category, exchange, 'USD']
-      );
+    // Check if symbol exists in stock_data (for stocks/ETFs) or asset_info (for crypto/indices)
+    const isCrypto = symbol.startsWith('X:') && symbol.endsWith('USD');
+    const isIndex = symbol.startsWith('^');
+    
+    if (!isCrypto && !isIndex) {
+      // For stocks/ETFs, check stock_data
+      const stockCheck = await pool.query('SELECT ticker FROM stock_data WHERE ticker = $1 AND active = true', [symbol]);
+      if (stockCheck.rows.length === 0) {
+        return res.status(404).json({ error: 'Asset not found', message: 'Stock/ETF not found in database' });
+      }
+    } else {
+      // For crypto/indices, check asset_info
+      const assetCheck = await pool.query('SELECT symbol FROM asset_info WHERE symbol = $1', [symbol]);
+      if (assetCheck.rows.length === 0) {
+        // Create asset_info entry if it doesn't exist (for crypto/indices)
+        const { determineCategory, normalizeCategory } = require('../utils/categoryUtils');
+        const exchange = 'NYSE'; // Default exchange
+        const category = normalizeCategory(determineCategory(symbol, isCrypto ? 'crypto' : 'index', exchange)) || 'Unknown';
+        const { extractTickerSymbol, generateDisplayName } = require('../utils/assetSymbolUtils');
+        const tickerSymbol = extractTickerSymbol(symbol);
+        const displayName = generateDisplayName(symbol, symbol);
+        
+        await pool.query(
+          `INSERT INTO asset_info (symbol, name, ticker_symbol, display_name, type, category, exchange, currency, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+           ON CONFLICT (symbol) DO UPDATE SET 
+             category = EXCLUDED.category,
+             ticker_symbol = EXCLUDED.ticker_symbol,
+             display_name = EXCLUDED.display_name`,
+          [symbol, symbol, tickerSymbol, displayName, isCrypto ? 'crypto' : 'index', category, exchange, 'USD']
+        );
+      }
     }
 
     await pool.query(

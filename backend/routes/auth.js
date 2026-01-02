@@ -85,7 +85,7 @@ router.post('/login', async (req, res) => {
 
     // Find user by email (check all auth types)
     const result = await pool.query(
-      'SELECT id, email, password_hash, name, auth_type, google_id, is_admin, is_superuser FROM users WHERE email = $1',
+      'SELECT id, email, password_hash, name, auth_type, google_id, is_admin, is_superuser, is_banned, is_restricted, ban_reason FROM users WHERE email = $1',
       [email]
     );
 
@@ -128,7 +128,10 @@ router.post('/login', async (req, res) => {
         name: user.name,
         auth_type: user.auth_type,
         is_admin: user.is_admin || false,
-        is_superuser: user.is_superuser || false
+        is_superuser: user.is_superuser || false,
+        is_banned: user.is_banned || false,
+        is_restricted: user.is_restricted || false,
+        ban_reason: user.ban_reason || null
       },
       token
     });
@@ -150,20 +153,66 @@ function getDefaultAvatarUrl() {
 
 /**
  * Process OAuth avatar URL
- * Handles avatar URLs from different OAuth providers (Google, Apple, Meta, X)
+ * Downloads OAuth provider avatars and uploads them to GCP
  * @param {string} picture - Avatar URL from OAuth provider
+ * @param {number} userId - User ID
  * @param {string} provider - OAuth provider name ('google', 'apple', 'meta', 'x')
- * @returns {string|null} - Processed avatar URL or default avatar
+ * @returns {Promise<string|null>} - GCP avatar URL or default avatar
  */
-function processOAuthAvatar(picture, provider = 'google') {
+async function processOAuthAvatar(picture, userId, provider = 'google') {
   if (!picture) {
     return getDefaultAvatarUrl();
   }
 
-  // For now, we store OAuth provider URLs directly
-  // In the future, we might want to download and store them in GCP
-  // For Google, the picture URL is already a direct link to the image
-  return picture;
+  try {
+    const { imageService } = require('../services');
+    const axios = require('axios');
+    const path = require('path');
+    const fs = require('fs').promises;
+    const sharp = require('sharp');
+
+    // Download the avatar from OAuth provider
+    console.log(`📥 Downloading ${provider} avatar for user ${userId}...`);
+    const response = await axios.get(picture, {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+    });
+
+    if (!response.data || !response.headers['content-type']?.includes('image')) {
+      console.warn(`⚠️  Invalid image response from ${provider} for user ${userId}`);
+      return getDefaultAvatarUrl();
+    }
+
+    // Create temp file
+    const tempDir = path.join(__dirname, '../temp/oauth_avatars');
+    await fs.mkdir(tempDir, { recursive: true });
+    const tempPath = path.join(tempDir, `${userId}_${provider}_${Date.now()}.jpg`);
+
+    // Save to temp file
+    await fs.writeFile(tempPath, response.data);
+
+    // Process and upload to GCP
+    const result = await imageService.processAndUploadAvatar(tempPath, userId, {
+      maxWidth: 400,
+      maxHeight: 400,
+      quality: 85,
+    });
+
+    // Clean up temp file
+    try {
+      await fs.unlink(tempPath);
+    } catch (cleanupError) {
+      console.warn('Failed to cleanup temp OAuth avatar:', cleanupError.message);
+    }
+
+    console.log(`✅ ${provider} avatar uploaded to GCP for user ${userId}`);
+    return result.publicUrl;
+
+  } catch (error) {
+    console.error(`❌ Error processing ${provider} avatar for user ${userId}:`, error.message);
+    // Fallback to original URL if download/upload fails
+    return picture;
+  }
 }
 
 // Register/Login with Google OAuth
@@ -175,12 +224,13 @@ router.post('/google', async (req, res) => {
       return res.status(400).json({ error: 'Google ID and email are required' });
     }
 
-    // Process OAuth avatar (use Google picture or default)
-    const avatarUrl = processOAuthAvatar(picture, 'google');
+    // Process OAuth avatar (download and upload to GCP)
+    // We'll get the user ID after checking if they exist, so we'll process it later
+    let avatarUrl = null;
 
     // Check if user exists with this Google ID
     let result = await pool.query(
-      'SELECT id, email, name, auth_type, password_hash, is_admin, is_superuser, avatar_url FROM users WHERE google_id = $1',
+      'SELECT id, email, name, auth_type, password_hash, is_admin, is_superuser, is_banned, is_restricted, ban_reason, avatar_url FROM users WHERE google_id = $1',
       [googleId]
     );
 
@@ -191,24 +241,34 @@ router.post('/google', async (req, res) => {
       // User exists with this Google ID - login
       user = result.rows[0];
       
-      // Update avatar if it's different and we have a new one
-      if (avatarUrl && avatarUrl !== user.avatar_url) {
-        await pool.query(
-          'UPDATE users SET avatar_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-          [avatarUrl, user.id]
-        );
-        user.avatar_url = avatarUrl;
+      // Download and upload OAuth avatar to GCP if we have a picture
+      if (picture) {
+        avatarUrl = await processOAuthAvatar(picture, user.id, 'google');
+        
+        // Update avatar if it's different
+        if (avatarUrl && avatarUrl !== user.avatar_url) {
+          await pool.query(
+            'UPDATE users SET avatar_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+            [avatarUrl, user.id]
+          );
+          user.avatar_url = avatarUrl;
+        }
       }
     } else {
       // Check if email exists (to link accounts or handle existing user)
       const emailCheck = await pool.query(
-        'SELECT id, email, name, auth_type, password_hash, google_id, is_admin, is_superuser, avatar_url FROM users WHERE email = $1',
+        'SELECT id, email, name, auth_type, password_hash, google_id, is_admin, is_superuser, is_banned, is_restricted, ban_reason, avatar_url FROM users WHERE email = $1',
         [email]
       );
 
       if (emailCheck.rows.length > 0) {
         // Email exists - link the accounts
         const existingUser = emailCheck.rows[0];
+        
+        // Download and upload OAuth avatar to GCP if we have a picture
+        if (picture) {
+          avatarUrl = await processOAuthAvatar(picture, existingUser.id, 'google');
+        }
         
         // Use OAuth avatar if available, otherwise keep existing avatar
         const finalAvatarUrl = avatarUrl || existingUser.avatar_url;
@@ -231,18 +291,36 @@ router.post('/google', async (req, res) => {
         );
         
         user = result.rows[0];
-        // Preserve admin/superuser status from existing user
+        // Preserve admin/superuser and ban status from existing user
         user.is_admin = existingUser.is_admin || false;
         user.is_superuser = existingUser.is_superuser || false;
+        user.is_banned = existingUser.is_banned || false;
+        user.is_restricted = existingUser.is_restricted || false;
+        user.ban_reason = existingUser.ban_reason || null;
         console.log(`Linked Google account to existing account for email: ${email} (is_admin: ${user.is_admin}, is_superuser: ${user.is_superuser})`);
       } else {
         // Create new user with Google auth
+        // First insert user, then process avatar (we need the user ID)
         result = await pool.query(
-          'INSERT INTO users (email, google_id, auth_type, name, avatar_url) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, auth_type, is_admin, is_superuser, avatar_url, created_at',
-          [email, googleId, 'google', name || null, avatarUrl]
+          'INSERT INTO users (email, google_id, auth_type, name) VALUES ($1, $2, $3, $4) RETURNING id, email, name, auth_type, is_admin, is_superuser, avatar_url, created_at',
+          [email, googleId, 'google', name || null]
         );
         user = result.rows[0];
         isNewUser = true;
+        
+        // Download and upload OAuth avatar to GCP if we have a picture
+        if (picture) {
+          avatarUrl = await processOAuthAvatar(picture, user.id, 'google');
+          
+          // Update user with GCP avatar URL
+          if (avatarUrl) {
+            await pool.query(
+              'UPDATE users SET avatar_url = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+              [avatarUrl, user.id]
+            );
+            user.avatar_url = avatarUrl;
+          }
+        }
       }
     }
 

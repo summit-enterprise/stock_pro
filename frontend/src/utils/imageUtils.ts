@@ -1,9 +1,35 @@
 /**
  * Image URL Utilities
- * Normalizes image URLs, especially for avatars
+ * Normalizes image URLs for avatars and asset logos
  */
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
+
+/**
+ * Normalize GCP image URL - converts backend URLs to Next.js API route format
+ * @param {string} url - Original URL (may include backend URL prefix)
+ * @returns {string | null} Normalized URL for Next.js Image component
+ */
+function normalizeGcpUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  
+  // Handle backend URLs with GCP path (most common case)
+  if (url.includes('/api/image/gcp/')) {
+    const match = url.match(/\/api\/image\/gcp\/(.+)$/);
+    if (match) {
+      // Remove backend URL prefix if present, keep just the path
+      const gcpPath = match[1];
+      return `/api/image/gcp/${gcpPath}`;
+    }
+  }
+  
+  // Return as-is if already in correct format (Next.js API route)
+  if (url.startsWith('/api/image/')) {
+    return url;
+  }
+  
+  return url;
+}
 
 /**
  * Normalize avatar URL - converts old mock-storage URLs to new format
@@ -27,42 +53,62 @@ export function normalizeAvatarUrl(avatarUrl: string | null | undefined): string
     }
   }
   
-  // If it's already a backend URL, convert to Next.js API route
-  if (avatarUrl.includes(BACKEND_URL) && avatarUrl.includes('/api/image/avatar/')) {
+  // Handle GCP URLs
+  const gcpNormalized = normalizeGcpUrl(avatarUrl);
+  if (gcpNormalized) return gcpNormalized;
+  
+  // Handle backend URLs with avatar path (legacy)
+  if (avatarUrl.includes('/api/image/avatar/')) {
     const match = avatarUrl.match(/\/api\/image\/avatar\/(.+)$/);
     if (match) {
+      // Remove backend URL prefix if present
       return `/api/image/avatar/${match[1]}`;
     }
   }
   
-  // If it's a GCP URL, use the GCP proxy route
-  if (avatarUrl.includes('/api/image/gcp/')) {
-    const match = avatarUrl.match(/\/api\/image\/gcp\/(.+)$/);
-    if (match) {
-      // For GCP images, we need to proxy through Next.js API route too
-      return `/api/image/gcp/${match[1]}`;
-    }
-  }
-  
-  // Return as-is if already in correct format (Next.js API route)
-  if (avatarUrl.startsWith('/api/image/')) {
-    return avatarUrl;
-  }
-  
   // Handle OAuth provider avatar URLs (Google, Apple, Meta, X, etc.)
-  // These are external URLs that Next.js Image can handle directly
+  // Note: OAuth avatars should now be stored in GCP, but we keep this for backward compatibility
   if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
-    // Google OAuth avatars
+    // Google OAuth avatars - these should be migrated to GCP
     if (avatarUrl.includes('lh3.googleusercontent.com') || 
         avatarUrl.includes('googleusercontent.com')) {
+      // In development, allow OAuth URLs temporarily
+      // In production, all avatars should be in GCP
+      if (process.env.NODE_ENV === 'production') {
+        console.warn('OAuth avatar URL detected in production - should be migrated to GCP:', avatarUrl);
+      }
       return avatarUrl;
     }
-    // Future: Add other OAuth providers (Apple, Meta, X, etc.)
-    // For now, return as-is for any external URL
+    // Return as-is for any external URL
     return avatarUrl;
   }
   
   // Return as-is for external URLs
   return avatarUrl;
+}
+
+/**
+ * Normalize logo URL - converts backend URLs to Next.js API route format
+ * Ensures all logos use GCP URLs with proper caching
+ * @param {string} logoUrl - Original logo URL
+ * @returns {string | null} Normalized logo URL
+ */
+export function normalizeLogoUrl(logoUrl: string | null | undefined): string | null {
+  if (!logoUrl) return null;
+  
+  // Handle GCP URLs (most common case)
+  const gcpNormalized = normalizeGcpUrl(logoUrl);
+  if (gcpNormalized) return gcpNormalized;
+  
+  // Handle external URLs (from APIs - should be migrated to GCP)
+  if (logoUrl.startsWith('http://') || logoUrl.startsWith('https://')) {
+    // Log warning for external URLs that should be in GCP
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('External logo URL detected - should be migrated to GCP:', logoUrl);
+    }
+    return logoUrl;
+  }
+  
+  return logoUrl;
 }
 

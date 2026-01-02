@@ -60,6 +60,22 @@ const initDb = async () => {
                          WHERE table_name='users' AND column_name='avatar_url') THEN
             ALTER TABLE users ADD COLUMN avatar_url TEXT;
           END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='is_banned') THEN
+            ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT FALSE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='is_restricted') THEN
+            ALTER TABLE users ADD COLUMN is_restricted BOOLEAN DEFAULT FALSE;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='ban_reason') THEN
+            ALTER TABLE users ADD COLUMN ban_reason TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='users' AND column_name='banned_at') THEN
+            ALTER TABLE users ADD COLUMN banned_at TIMESTAMP;
+          END IF;
         END $$;
       `);
     } catch (alterError) {
@@ -117,6 +133,37 @@ const initDb = async () => {
       console.warn('Could not add/update category column:', alterError.message);
     }
 
+    // Add ticker_symbol and display_name columns for intuitive search
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='asset_info' AND column_name='ticker_symbol') THEN
+            ALTER TABLE asset_info ADD COLUMN ticker_symbol VARCHAR(50);
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                         WHERE table_name='asset_info' AND column_name='display_name') THEN
+            ALTER TABLE asset_info ADD COLUMN display_name VARCHAR(255);
+          END IF;
+        END $$;
+      `);
+      
+      // Create indexes for faster search
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_asset_info_ticker_symbol 
+        ON asset_info(ticker_symbol);
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_asset_info_display_name 
+        ON asset_info(display_name);
+      `);
+      
+      console.log('✅ Added ticker_symbol and display_name columns to asset_info');
+    } catch (alterError) {
+      console.warn('Could not add ticker_symbol/display_name columns:', alterError.message);
+    }
+
     // Crypto coin IDs table (maps database symbols to CoinGecko coin IDs)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS crypto_coin_ids (
@@ -127,19 +174,240 @@ const initDb = async () => {
       );
     `);
 
+    // Stock data table (stores raw response data from Massive.com API)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS stock_data (
+        ticker VARCHAR(50) PRIMARY KEY,
+        active BOOLEAN,
+        cik VARCHAR(20),
+        composite_figi VARCHAR(50),
+        currency_name VARCHAR(10),
+        last_updated_utc TIMESTAMP,
+        last_updated TIMESTAMP,
+        locale VARCHAR(10),
+        market VARCHAR(50),
+        name VARCHAR(255),
+        primary_exchange VARCHAR(50),
+        share_class_figi VARCHAR(50),
+        type VARCHAR(10),
+        acronym VARCHAR(20),
+        massive_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Add acronym and massive_id columns if they don't exist (for existing tables)
+    await pool.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'stock_data' AND column_name = 'acronym'
+        ) THEN
+          ALTER TABLE stock_data ADD COLUMN acronym VARCHAR(20);
+        END IF;
+        
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'stock_data' AND column_name = 'massive_id'
+        ) THEN
+          ALTER TABLE stock_data ADD COLUMN massive_id INTEGER;
+        END IF;
+      END $$;
+    `);
+
+    // Ensure primary key exists (ticker is already PRIMARY KEY, but verify)
+    try {
+      await pool.query(`
+        DO $$ 
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint 
+            WHERE conname = 'stock_data_pkey' 
+            AND conrelid = 'stock_data'::regclass
+          ) THEN
+            ALTER TABLE stock_data ADD PRIMARY KEY (ticker);
+          END IF;
+        END $$;
+      `);
+      console.log('✅ Verified stock_data table has primary key on ticker');
+    } catch (alterError) {
+      console.warn('Could not verify/add primary key (may already exist):', alterError.message);
+    }
+
+    // Create indexes for faster queries
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_stock_data_active ON stock_data(active);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_stock_data_market ON stock_data(market);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_stock_data_type ON stock_data(type);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_stock_data_exchange ON stock_data(primary_exchange);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_stock_data_acronym ON stock_data(acronym);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_stock_data_massive_id ON stock_data(massive_id);
+    `);
+
+    // Crypto data table (stores raw response data from Massive.com API)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS crypto_data (
+        ticker VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(255),
+        market VARCHAR(50),
+        locale VARCHAR(10),
+        active BOOLEAN,
+        currency_symbol VARCHAR(10),
+        currency_name VARCHAR(100),
+        base_currency_symbol VARCHAR(20),
+        base_currency_name VARCHAR(100),
+        last_updated_utc TIMESTAMP,
+        last_updated TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create indexes for crypto_data
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_crypto_data_active ON crypto_data(active);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_crypto_data_base_currency ON crypto_data(base_currency_symbol);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_crypto_data_currency ON crypto_data(currency_symbol);
+    `);
+
+    // Forex data table (stores raw response data from Massive.com API)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS forex_data (
+        ticker VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(255),
+        market VARCHAR(50),
+        locale VARCHAR(10),
+        active BOOLEAN,
+        currency_symbol VARCHAR(10),
+        currency_name VARCHAR(100),
+        base_currency_symbol VARCHAR(20),
+        base_currency_name VARCHAR(100),
+        last_updated_utc TIMESTAMP,
+        last_updated TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create indexes for forex_data
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_forex_data_active ON forex_data(active);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_forex_data_base_currency ON forex_data(base_currency_symbol);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_forex_data_currency ON forex_data(currency_symbol);
+    `);
+
+    // Indices data table (stores raw response data from Massive.com API)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS indices_data (
+        ticker VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(255),
+        market VARCHAR(50),
+        locale VARCHAR(10),
+        active BOOLEAN,
+        currency_symbol VARCHAR(10),
+        currency_name VARCHAR(100),
+        base_currency_symbol VARCHAR(20),
+        base_currency_name VARCHAR(100),
+        last_updated_utc TIMESTAMP,
+        last_updated TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Create indexes for indices_data
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_indices_data_active ON indices_data(active);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_indices_data_base_currency ON indices_data(base_currency_symbol);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_indices_data_currency ON indices_data(currency_symbol);
+    `);
+
     // Asset data table (TimescaleDB hypertable)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS asset_data (
         symbol VARCHAR(50) NOT NULL,
         date DATE NOT NULL,
+        timestamp TIMESTAMP DEFAULT NULL,
         open NUMERIC(18,8),
         high NUMERIC(18,8),
         low NUMERIC(18,8),
         close NUMERIC(18,8),
         volume BIGINT,
-        adjusted_close NUMERIC(18,8),
-        PRIMARY KEY (symbol, date)
+        adjusted_close NUMERIC(18,8)
       );
+    `);
+
+    // Add timestamp column if it doesn't exist (for hourly data)
+    await pool.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'asset_data' AND column_name = 'timestamp'
+        ) THEN
+          ALTER TABLE asset_data ADD COLUMN timestamp TIMESTAMP DEFAULT NULL;
+        END IF;
+      END $$;
+    `);
+
+    // Drop old primary key if it exists
+    await pool.query(`
+      DO $$ 
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint 
+          WHERE conname = 'asset_data_pkey' 
+          AND conrelid = 'asset_data'::regclass
+        ) THEN
+          ALTER TABLE asset_data DROP CONSTRAINT asset_data_pkey;
+        END IF;
+      END $$;
+    `);
+
+    // Drop old unique index if it exists
+    await pool.query(`
+      DROP INDEX IF EXISTS asset_data_unique_idx;
+    `);
+
+    // Create unique index that handles NULL timestamps (for daily vs hourly data)
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS asset_data_unique_idx 
+      ON asset_data (symbol, date, COALESCE(timestamp, '1970-01-01 00:00:00'::timestamp));
+    `);
+
+    // Note: PostgreSQL doesn't allow constraints on expression indexes
+    // The unique index itself will enforce uniqueness, which is sufficient
+    
+    // Create a partial unique index for daily records (timestamp IS NULL)
+    // This ensures daily records are unique per symbol+date
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS asset_data_daily_unique_idx 
+      ON asset_data (symbol, date) 
+      WHERE timestamp IS NULL;
     `);
 
     // Watchlist table
@@ -794,6 +1062,31 @@ const initDb = async () => {
     `);
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_asset_search_last_searched ON asset_search_tracking(last_searched_at DESC);
+    `);
+
+    // YouTube Channels table - Manage livestream channels
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS youtube_channels (
+        id SERIAL PRIMARY KEY,
+        channel_id VARCHAR(255) UNIQUE NOT NULL,
+        channel_name VARCHAR(255) NOT NULL,
+        subject VARCHAR(255),
+        category VARCHAR(50) NOT NULL CHECK (category IN ('fintech', 'news')),
+        content_type VARCHAR(50) NOT NULL CHECK (content_type IN ('live', 'video')),
+        pull_livestreams BOOLEAN DEFAULT TRUE,
+        is_active BOOLEAN DEFAULT TRUE,
+        last_video_id VARCHAR(255),
+        last_video_updated_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_youtube_channels_category ON youtube_channels(category);
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_youtube_channels_active ON youtube_channels(is_active);
     `);
 
     console.log('Database schema initialized');

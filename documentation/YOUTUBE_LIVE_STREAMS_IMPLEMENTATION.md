@@ -14,10 +14,13 @@ The live streams feature allows users to watch fintech and financial news YouTub
 - `checkChannelLiveStatus(channelId)` - Check single channel
 - `checkMultipleChannelsLiveStatus(channelIds)` - Batch check multiple channels
 
-**How it works**:
-1. Uses YouTube Data API v3 to search for live streams
-2. If live stream found, returns live video ID
-3. If not live, fetches latest video from channel's uploads playlist
+**How it works** (Optimized for minimal API usage):
+1. **Batch fetches channel info** (uploads playlist IDs) for all channels in one API call (up to 50 channels = 1 unit)
+2. **Caches channel info** in memory for 1 hour to avoid repeated API calls
+3. For each channel:
+   - Checks if live using search API (100 units) - if live, returns immediately
+   - If not live, uses cached uploads playlist ID to get latest video (1 unit)
+   - Falls back to channel embed URL if no videos found (0 units)
 4. Returns video ID, title, thumbnail, and live status
 
 ### API Routes (`routes/youtube.js`)
@@ -31,7 +34,7 @@ The live streams feature allows users to watch fintech and financial news YouTub
 - 4x3 grid layout (12 channels per page)
 - Pagination (up to 25 channels per category)
 - Live status indicator (red "LIVE" badge)
-- Automatic refresh every 30 seconds
+- Automatic refresh every 10 minutes (reduced from 5 minutes to minimize API usage)
 - Clickable overlay to open on YouTube
 - Uses video ID when available, falls back to channel live stream URL
 
@@ -59,10 +62,15 @@ YOUTUBE_API_KEY=your_youtube_api_key_here
 - Each `channels` request: 1 unit
 - Each `playlistItems` request: 1 unit
 
-**Estimated usage per check**:
-- Live check: ~101 units per channel
-- Batch of 25 channels: ~2,525 units
-- Can check ~3-4 times per day with default quota
+**Estimated usage per check** (Optimized):
+- **Before optimization**: ~205 units per channel (multiple API calls with fallbacks)
+- **After optimization**: ~101-102 units per channel
+  - 1 unit for batch channel info (shared across all channels)
+  - 100 units for live search check
+  - 1 unit for latest video from playlist (if not live)
+- **Batch of 25 channels**: ~2,525 units (1 + 25×101)
+- **With caching**: Subsequent checks within 1 hour use ~2,525 units (channel info cached)
+- Can check ~3-4 times per day with default quota (10,000 units/day)
 
 ## Embed URLs
 
@@ -122,11 +130,35 @@ In local mode (`NODE_ENV=local`), uses mock service that:
 - Generates mock video IDs
 - No API calls needed
 
+## Optimizations Implemented
+
+### 1. Batch Channel Info Fetching
+- Fetches uploads playlist IDs for all channels in one API call (up to 50 channels)
+- Reduces from N API calls to 1 API call for channel info
+
+### 2. In-Memory Caching
+- Caches channel info (uploads playlist IDs) for 1 hour
+- Avoids repeated API calls for the same channel within cache period
+- Significantly reduces quota usage for frequent checks
+
+### 3. Optimized API Call Flow
+- Checks live status first (most important)
+- Uses pre-fetched uploads playlist IDs to get latest video
+- Eliminates unnecessary fallback API calls
+- Falls back to channel embed URL (no API call needed)
+
+### 4. Reduced Refresh Frequency
+- Frontend refresh interval increased from 5 minutes to 10 minutes
+- Reduces API calls by 50% while still maintaining reasonable update frequency
+
 ## Future Enhancements
 
-1. Cache live statuses in Redis (reduce API calls)
-2. WebSocket updates for real-time live status
-3. User preferences for favorite channels
-4. Notifications when channels go live
-5. Schedule/upcoming streams display
+1. ✅ **Batch channel info fetching** - Implemented
+2. ✅ **In-memory caching** - Implemented
+3. Redis caching for live statuses (reduce API calls further)
+4. WebSocket updates for real-time live status
+5. User preferences for favorite channels
+6. Notifications when channels go live
+7. Schedule/upcoming streams display
+
 

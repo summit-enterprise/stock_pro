@@ -1,20 +1,53 @@
 /**
  * Image Service
  * Handles image upload, compression, optimization, and storage
+ * All images are stored in GCP Storage for local, dev, and prod environments
  */
 
 const sharp = require('sharp');
 const path = require('path');
 const fs = require('fs').promises;
 const storageService = require('../infrastructure/storageService');
+const { ensureBucket } = require('../infrastructure/googleCloudService');
 
-const AVATAR_FOLDER = 'avatars';
+// Asset folder structure in GCP bucket
+const ASSET_FOLDERS = {
+  avatars: 'avatars',
+  logos: 'logos',
+  backgrounds: 'backgrounds',
+  branding: 'branding',
+  marketing: 'marketing',
+  icons: 'icons',
+  general: 'images',
+};
+
+const { getBucketName } = require('../../utils/bucketConfig');
+
+const AVATAR_FOLDER = ASSET_FOLDERS.avatars;
 const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5MB
 const DEFAULT_AVATAR_DIMENSIONS = { width: 400, height: 400 };
 const AVATAR_QUALITY = 85;
+const BUCKET_NAME = getBucketName();
 
 /**
- * Process and upload avatar image
+ * Ensure GCP bucket exists and is configured
+ */
+async function ensureAssetBucket() {
+  try {
+    await ensureBucket(BUCKET_NAME, {
+      location: 'US',
+      storageClass: 'STANDARD',
+    });
+    console.log(`✅ Asset bucket ready: ${BUCKET_NAME}`);
+  } catch (error) {
+    console.error(`❌ Failed to ensure bucket ${BUCKET_NAME}:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Process and upload avatar image to GCP
+ * Works for local, dev, and prod environments
  * @param {string} filePath - Local file path
  * @param {number} userId - User ID
  * @param {Object} options - Processing options
@@ -22,6 +55,9 @@ const AVATAR_QUALITY = 85;
  */
 async function processAndUploadAvatar(filePath, userId, options = {}) {
   try {
+    // Ensure bucket exists
+    await ensureAssetBucket();
+
     const {
       maxWidth = DEFAULT_AVATAR_DIMENSIONS.width,
       maxHeight = DEFAULT_AVATAR_DIMENSIONS.height,
@@ -30,8 +66,8 @@ async function processAndUploadAvatar(filePath, userId, options = {}) {
 
     // Get file extension
     const ext = path.extname(filePath).toLowerCase();
-    const timestamp = Date.now();
-    const destinationPath = `${AVATAR_FOLDER}/${userId}_${timestamp}.webp`;
+    // Use user ID as filename (no timestamp - one avatar per user)
+    const destinationPath = `${AVATAR_FOLDER}/${userId}.webp`;
 
     // Process image with sharp
     let processedBuffer;
@@ -58,20 +94,29 @@ async function processAndUploadAvatar(filePath, userId, options = {}) {
       processedBuffer,
       destinationPath,
       {
-        public: false, // Keep files private
+        bucket: BUCKET_NAME,
+        public: false, // Keep files private, serve via signed URLs
         contentType: 'image/webp',
+        cacheControl: 'public, max-age=31536000, immutable',
       }
     );
 
     // Return path that will be served via authenticated route
-    const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
-    const imageUrl = `${BACKEND_URL}/api/image/gcp/${destinationPath}`;
+    // Format: /api/image/gcp/avatars/{userId}.webp (relative path for frontend)
+    // Frontend will handle the backend URL prefix via Next.js API route
+    // This path is environment-agnostic - the backend will use the correct bucket based on NODE_ENV
+    const imageUrl = `/api/image/gcp/${destinationPath}`;
+
+    const { getCurrentEnvironment } = require('../../utils/bucketConfig');
+    const currentEnv = getCurrentEnvironment();
+    console.log(`✅ Avatar uploaded to GCP (${currentEnv}): ${BUCKET_NAME}/${destinationPath} (${(processedBuffer.length / 1024).toFixed(2)}KB)`);
 
     return {
       success: true,
       publicUrl: imageUrl, // This is actually a private URL served via our API
       path: destinationPath,
       size: processedBuffer.length,
+      gcpPath: destinationPath,
     };
   } catch (error) {
     console.error('Avatar processing error:', error);
@@ -185,13 +230,98 @@ async function getImageMetadata(filePath) {
   }
 }
 
+/**
+ * Upload general image asset to GCP
+ * @param {string} filePath - Local file path
+ * @param {string} folder - Asset folder (avatars, logos, backgrounds, branding, marketing, icons, general)
+ * @param {string} filename - Filename (without extension)
+ * @param {Object} options - Processing options
+ * @returns {Promise<Object>} Upload result
+ */
+async function uploadImageAsset(filePath, folder, filename, options = {}) {
+  try {
+    await ensureAssetBucket();
+
+    const {
+      maxWidth,
+      maxHeight,
+      quality = 85,
+      format = 'webp',
+      public: isPublic = false,
+    } = options;
+
+    const folderPath = ASSET_FOLDERS[folder] || ASSET_FOLDERS.general;
+    const ext = path.extname(filePath).toLowerCase();
+    const finalFormat = format === 'auto' ? (ext.replace('.', '') || 'webp') : format;
+    const destinationPath = `${folderPath}/${filename}.${finalFormat}`;
+
+    // Process image if needed
+    let processedBuffer;
+    if (maxWidth || maxHeight || format !== 'auto') {
+      let image = sharp(filePath);
+      
+      if (maxWidth || maxHeight) {
+        image = image.resize(maxWidth, maxHeight, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
+      }
+
+      if (finalFormat === 'webp') {
+        processedBuffer = await image.webp({ quality }).toBuffer();
+      } else if (finalFormat === 'jpeg' || finalFormat === 'jpg') {
+        processedBuffer = await image.jpeg({ quality }).toBuffer();
+      } else if (finalFormat === 'png') {
+        processedBuffer = await image.png({ quality }).toBuffer();
+      } else {
+        processedBuffer = await image.toBuffer();
+      }
+    } else {
+      // Read file as-is
+      processedBuffer = await fs.readFile(filePath);
+    }
+
+    // Upload to GCP
+    const uploadResult = await storageService.uploadFromBuffer(
+      processedBuffer,
+      destinationPath,
+      {
+        bucket: BUCKET_NAME,
+        public: isPublic,
+        contentType: `image/${finalFormat}`,
+        cacheControl: 'public, max-age=31536000, immutable',
+      }
+    );
+
+    const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
+    const imageUrl = isPublic
+      ? uploadResult.publicUrl
+      : `${BACKEND_URL}/api/image/gcp/${destinationPath}`;
+
+    return {
+      success: true,
+      publicUrl: imageUrl,
+      path: destinationPath,
+      size: processedBuffer.length,
+      gcpPath: destinationPath,
+    };
+  } catch (error) {
+    console.error('Image asset upload error:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   processAndUploadAvatar,
+  uploadImageAsset,
   validateImage,
   compressImage,
   getImageMetadata,
+  ensureAssetBucket,
   AVATAR_FOLDER,
+  ASSET_FOLDERS,
   MAX_AVATAR_SIZE,
   DEFAULT_AVATAR_DIMENSIONS,
+  BUCKET_NAME,
 };
 

@@ -359,6 +359,7 @@ export default function AccountPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarError, setAvatarError] = useState(false);
   
   // Editing states for each field
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -394,6 +395,27 @@ export default function AccountPage() {
       });
 
       if (!response.ok) {
+        // If 403, user might be restricted - try to get error details
+        if (response.status === 403) {
+          const errorData = await response.json().catch(() => ({}));
+          // If user is restricted, they should be redirected to restricted page
+          // But allow them to see profile if they're already on account page
+          if (errorData.is_banned || errorData.is_restricted) {
+            // Still try to show profile data from localStorage if available
+            const userStr = localStorage.getItem('user');
+            if (userStr) {
+              try {
+                const cachedUser = JSON.parse(userStr);
+                setUser(cachedUser);
+                setAvatarUrl(cachedUser.avatar_url);
+                setLoading(false);
+                return;
+              } catch (e) {
+                // Fall through to error
+              }
+            }
+          }
+        }
         throw new Error('Failed to fetch profile');
       }
 
@@ -404,7 +426,19 @@ export default function AccountPage() {
       }
     } catch (error) {
       console.error('Error fetching profile:', error);
-      setError('Failed to load profile');
+      // Try to use cached user data as fallback
+      const userStr = localStorage.getItem('user');
+      if (userStr) {
+        try {
+          const cachedUser = JSON.parse(userStr);
+          setUser(cachedUser);
+          setAvatarUrl(cachedUser.avatar_url);
+        } catch (e) {
+          setError('Failed to load profile');
+        }
+      } else {
+        setError('Failed to load profile');
+      }
     } finally {
       setLoading(false);
     }
@@ -634,13 +668,14 @@ export default function AccountPage() {
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-zinc-800 dark:to-zinc-800 px-6 py-8 border-b border-gray-200 dark:border-zinc-800">
               <div className="flex items-center gap-6">
                 <div className="relative">
-                  {avatarUrl ? (
+                  {avatarUrl && !avatarError ? (
                     <Image
                       src={normalizeAvatarUrl(avatarUrl) || ''}
                       alt="Avatar"
                       width={96}
                       height={96}
                       className="rounded-full object-cover border-4 border-white dark:border-zinc-900 shadow-lg"
+                      onError={() => setAvatarError(true)}
                     />
                   ) : (
                     <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center shadow-lg border-4 border-white dark:border-zinc-900">
@@ -756,7 +791,7 @@ export default function AccountPage() {
           </div>
 
           {/* Subscription Card */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-gray-200 dark:border-zinc-800 overflow-hidden mb-6">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-gray-200 dark:border-zinc-800 overflow-hidden mt-8 mb-8">
             <div className="p-6">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Subscription</h2>
               <div className="text-gray-600 dark:text-gray-400">
@@ -767,7 +802,7 @@ export default function AccountPage() {
           </div>
 
           {/* Billing Card */}
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-gray-200 dark:border-zinc-800 overflow-hidden mb-6">
+          <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm border border-gray-200 dark:border-zinc-800 overflow-hidden mt-8 mb-6">
             <div className="p-6">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Billing</h2>
               <div className="text-gray-600 dark:text-gray-400">

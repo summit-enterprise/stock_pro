@@ -151,11 +151,12 @@ router.get('/overview', async (req, res) => {
     const previousDate = previousDateResult.rows[0]?.date || mostRecentDate;
 
     // Single optimized query to get all assets with prices and changes
+    // Use stock_data for stocks/ETFs, asset_info for crypto/indices
     const priceDataResult = await pool.query(
       `SELECT 
         recent.symbol,
-        ai.name,
-        ai.type,
+        COALESCE(sd.name, ai.name) as name,
+        COALESCE(sd.type, ai.type) as type,
         recent.close as current_price,
         COALESCE(prev.close, recent.close) as prev_price,
         recent.close - COALESCE(prev.close, recent.close) as price_change,
@@ -165,7 +166,8 @@ router.get('/overview', async (req, res) => {
           ELSE 0
         END as change_percent
       FROM asset_data recent
-      INNER JOIN asset_info ai ON recent.symbol = ai.symbol
+      LEFT JOIN stock_data sd ON recent.symbol = sd.ticker AND sd.active = true
+      LEFT JOIN asset_info ai ON recent.symbol = ai.symbol
       LEFT JOIN asset_data prev ON recent.symbol = prev.symbol AND prev.date = $1
       WHERE recent.date = $2
         AND recent.symbol = ANY($3)
@@ -443,6 +445,190 @@ router.get('/movers', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Market movers error:', error);
+    res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// 1D Market movers endpoint (top gainers and losers based on 1D change from cache)
+router.get('/movers-1d', async (req, res) => {
+  try {
+    const cacheKey = 'market_movers_1d';
+    const CACHE_TTL = 5 * 60; // 5 minutes in seconds
+    const now = Date.now();
+
+    // Try Redis cache first
+    const redisClient = await getRedisClient();
+    if (redisClient && redisClient.isOpen) {
+      try {
+        const cachedData = await redisClient.get(cacheKey);
+        if (cachedData) {
+          const parsed = JSON.parse(cachedData);
+          // Check if cache is still valid (5 minutes)
+          if (now - parsed.timestamp < CACHE_TTL * 1000) {
+            console.log('Market movers 1D: Cache hit (Redis)');
+            return res.json({
+              stockGainers: parsed.stockGainers || [],
+              stockLosers: parsed.stockLosers || [],
+              cryptoGainers: parsed.cryptoGainers || [],
+              cryptoLosers: parsed.cryptoLosers || [],
+            });
+          }
+        }
+      } catch (redisError) {
+        console.warn('Market movers 1D: Redis cache read failed');
+      }
+    }
+
+    // Cache miss - calculate 1D change from database
+    console.log('Market movers 1D: Cache miss, calculating from database...');
+    
+    // Get today's date and yesterday's date
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+    
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+    // Get most recent date with data
+    const mostRecentDateResult = await pool.query(
+      `SELECT MAX(date) as max_date FROM asset_data WHERE date <= $1`,
+      [todayStr]
+    );
+    
+    if (!mostRecentDateResult.rows[0]?.max_date) {
+      return res.json({
+        stockGainers: [],
+        stockLosers: [],
+        cryptoGainers: [],
+        cryptoLosers: [],
+      });
+    }
+
+    const mostRecentDate = mostRecentDateResult.rows[0].max_date;
+    const mostRecentDateStr = mostRecentDate.toISOString().split('T')[0];
+
+    // Get previous date for comparison
+    const previousDateResult = await pool.query(
+      `SELECT date FROM asset_data 
+       WHERE date < $1 
+       ORDER BY date DESC 
+       LIMIT 1`,
+      [mostRecentDateStr]
+    );
+    
+    const previousDate = previousDateResult.rows[0]?.date || mostRecentDate;
+    const previousDateStr = previousDate.toISOString().split('T')[0];
+
+    // Get stock movers (equities/unknown, excluding crypto and indices)
+    const stockPriceChangeResult = await pool.query(
+      `SELECT 
+        recent.symbol,
+        ai.name,
+        ai.category,
+        recent.close as current_price,
+        recent.close - prev.close as price_change,
+        ((recent.close - prev.close) / NULLIF(prev.close, 0)) * 100 as change_percent
+      FROM asset_data recent
+      INNER JOIN asset_data prev ON recent.symbol = prev.symbol AND prev.date = $1
+      INNER JOIN asset_info ai ON recent.symbol = ai.symbol
+      WHERE recent.date = $2
+        AND recent.timestamp IS NULL
+        AND prev.timestamp IS NULL
+        AND (ai.category = 'Equity' OR ai.category IS NULL OR ai.category = 'Unknown')
+        AND ai.symbol NOT LIKE 'X:%'
+        AND ai.symbol NOT LIKE '^%'
+      ORDER BY change_percent DESC NULLS LAST`,
+      [previousDateStr, mostRecentDateStr]
+    );
+
+    // Get crypto movers
+    const cryptoPriceChangeResult = await pool.query(
+      `SELECT 
+        recent.symbol,
+        ai.name,
+        ai.category,
+        recent.close as current_price,
+        recent.close - prev.close as price_change,
+        ((recent.close - prev.close) / NULLIF(prev.close, 0)) * 100 as change_percent
+      FROM asset_data recent
+      INNER JOIN asset_data prev ON recent.symbol = prev.symbol AND prev.date = $1
+      INNER JOIN asset_info ai ON recent.symbol = ai.symbol
+      WHERE recent.date = $2
+        AND recent.timestamp IS NULL
+        AND prev.timestamp IS NULL
+        AND (ai.category = 'Crypto' OR ai.symbol LIKE 'X:%')
+      ORDER BY change_percent DESC NULLS LAST`,
+      [previousDateStr, mostRecentDateStr]
+    );
+
+    // Process stock movers
+    const allStockMovers = stockPriceChangeResult.rows
+      .filter(row => row.change_percent !== null && !isNaN(row.change_percent))
+      .map(row => ({
+        symbol: row.symbol,
+        name: row.name || row.symbol,
+        price: parseFloat(row.current_price) || 0,
+        change: parseFloat(row.price_change) || 0,
+        changePercent: parseFloat(row.change_percent) || 0,
+      }));
+
+    const stockGainers = allStockMovers
+      .filter(m => m.changePercent > 0)
+      .sort((a, b) => b.changePercent - a.changePercent)
+      .slice(0, 15);
+    
+    const stockLosers = allStockMovers
+      .filter(m => m.changePercent < 0)
+      .sort((a, b) => a.changePercent - b.changePercent)
+      .slice(0, 15);
+
+    // Process crypto movers
+    const allCryptoMovers = cryptoPriceChangeResult.rows
+      .filter(row => row.change_percent !== null && !isNaN(row.change_percent))
+      .map(row => ({
+        symbol: row.symbol,
+        name: row.name || row.symbol,
+        price: parseFloat(row.current_price) || 0,
+        change: parseFloat(row.price_change) || 0,
+        changePercent: parseFloat(row.change_percent) || 0,
+      }));
+
+    const cryptoGainers = allCryptoMovers
+      .filter(m => m.changePercent > 0)
+      .sort((a, b) => b.changePercent - a.changePercent)
+      .slice(0, 15);
+    
+    const cryptoLosers = allCryptoMovers
+      .filter(m => m.changePercent < 0)
+      .sort((a, b) => a.changePercent - b.changePercent)
+      .slice(0, 15);
+
+    const result = {
+      stockGainers: stockGainers,
+      stockLosers: stockLosers,
+      cryptoGainers: cryptoGainers,
+      cryptoLosers: cryptoLosers,
+    };
+
+    // Store in Redis cache (5 minutes)
+    if (redisClient && redisClient.isOpen) {
+      try {
+        await redisClient.setEx(
+          cacheKey,
+          CACHE_TTL,
+          JSON.stringify({ ...result, timestamp: now })
+        );
+        console.log('Market movers 1D: Stored in Redis cache');
+      } catch (redisError) {
+        console.warn('Market movers 1D: Failed to store in Redis cache');
+      }
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('Market movers 1D error:', error);
     res.status(500).json({ error: 'Internal server error', message: error.message });
   }
 });

@@ -27,52 +27,47 @@ All required packages are already installed:
 
 ## Authentication Setup
 
-### Option 1: Application Default Credentials (ADC) - **RECOMMENDED** ⭐
+### Option 1: Service Account Key File - **RECOMMENDED** ⭐
 
-**Best for:** Local development, dev environments, and when service account keys are blocked.
+**Best for:** All environments (local, dev, production). Provides full functionality including signed URLs.
 
-This method uses your user account credentials and doesn't require service account keys.
+**Service Account**: `stock-pro-svc@project-finance-482417.iam.gserviceaccount.com`
 
 #### Setup Steps:
 
-1. **Install Google Cloud SDK** (if not already installed):
-   ```bash
-   # macOS
-   brew install google-cloud-sdk
-   
-   # Or download from: https://cloud.google.com/sdk/docs/install
+1. **Service account key file is already set up** in `.secrets/gcp-service-account-key.json`
+
+2. **Add to `backend/.env`:**
+   ```env
+   # GCP Service Account Configuration
+   GOOGLE_APPLICATION_CREDENTIALS=./.secrets/gcp-service-account-key.json
+   GCP_PROJECT_ID=project-finance-482417
+   GCP_STORAGE_BUCKET=stock-app-assets-local
    ```
 
-2. **Authenticate with your admin account:**
-   ```bash
-   gcloud auth login admin@ma-summit-enterprise.com
-   ```
+#### How It Works:
 
-3. **Set up Application Default Credentials:**
+- ✅ Full service account access
+- ✅ Signed URL generation works
+- ✅ All GCP operations authenticated
+- ✅ Secure key file (not in git)
+
+### Option 2: Application Default Credentials (ADC) - Fallback
+
+**Best for:** When service account keys are not available (organization policy blocks keys).
+
+This method uses your user account credentials or service account impersonation.
+
+#### Setup Steps:
+
+1. **Set up Application Default Credentials:**
    ```bash
    gcloud auth application-default login
    ```
-   
-   This will:
-   - Open a browser for authentication
-   - Store credentials in `~/.config/gcloud/application_default_credentials.json`
-   - Make credentials available to all Google Cloud SDK clients
 
-4. **Set your project:**
+2. **Set your project:**
    ```bash
    gcloud config set project project-finance-482417
-   ```
-
-5. **Grant your user account Storage Admin role** (if needed):
-   ```bash
-   gcloud projects add-iam-policy-binding project-finance-482417 \
-     --member="user:admin@ma-summit-enterprise.com" \
-     --role="roles/storage.admin"
-   ```
-
-6. **Verify authentication:**
-   ```bash
-   gcloud auth application-default print-access-token
    ```
 
 #### For Service Account Impersonation (Optional):

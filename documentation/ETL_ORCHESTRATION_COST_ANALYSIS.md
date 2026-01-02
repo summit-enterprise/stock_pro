@@ -285,3 +285,5 @@ This document analyzes the costs of running background ETLs and data pipelines i
 3. **Plan Airflow migration**: If/when you outgrow Bull
 4. **Monitor costs**: Track infrastructure and API costs separately
 
+
+

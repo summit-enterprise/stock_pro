@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import ProtectedRoute from '@/components/ProtectedRoute';
-import PriceChart from '@/components/PriceChart';
+import UnifiedPriceChart from '@/components/UnifiedPriceChart';
 import AssetNews from '@/components/AssetNews';
 import AssetIcon from '@/components/AssetIcon';
 
@@ -667,31 +667,20 @@ export default function AssetDetailPage() {
           )}
         </div>
 
-        {/* Time Range Selector */}
-        <div className="mb-6">
-          <div className="flex gap-2 flex-wrap">
-            {timeRanges.map((range) => (
-              <button
-                key={range.value}
-                onClick={() => setTimeRange(range.value)}
-                className={`px-4 py-2 rounded-lg transition-colors ${
-                  timeRange === range.value
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-zinc-700'
-                }`}
-              >
-                {range.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Price Chart */}
         <div className="mb-8">
-          <PriceChart 
-            data={assetData.historicalData} 
+          <UnifiedPriceChart
             symbol={assetData.symbol}
+            name={assetData.name}
             timeRange={timeRange}
+            onTimeRangeChange={setTimeRange}
+            showTimeRangeSelector={true}
+            showPriceInfo={true}
+            currentPrice={assetData.currentPrice || undefined}
+            change={assetData.priceChange}
+            changePercent={assetData.priceChangePercent}
+            isDarkMode={typeof window !== 'undefined' && document.documentElement.classList.contains('dark')}
+            height={500}
           />
         </div>
 

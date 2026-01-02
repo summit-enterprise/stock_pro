@@ -150,14 +150,20 @@ async function storeCryptoMarketData(marketData) {
         const symbol = `X:${crypto.symbol}USD`;
         
         // Update asset_info with latest market data
+        const { extractTickerSymbol, generateDisplayName } = require('../../utils/assetSymbolUtils');
+        const tickerSymbol = extractTickerSymbol(symbol);
+        const displayName = generateDisplayName(symbol, crypto.name);
+        
         await pool.query(
           `UPDATE asset_info 
            SET name = $1, 
-               market_cap = $2, 
-               logo_url = COALESCE(logo_url, $3),
+               ticker_symbol = $2,
+               display_name = $3,
+               market_cap = $4, 
+               logo_url = COALESCE(logo_url, $5),
                updated_at = CURRENT_TIMESTAMP
-           WHERE symbol = $4`,
-          [crypto.name, crypto.marketCap, crypto.logoUrl, symbol]
+           WHERE symbol = $6`,
+          [crypto.name, tickerSymbol, displayName, crypto.marketCap, crypto.logoUrl, symbol]
         );
         
         // Store coin ID mapping if not exists
@@ -173,15 +179,15 @@ async function storeCryptoMarketData(marketData) {
         // Store current price in asset_data (for charting)
         const today = new Date().toISOString().split('T')[0];
         await pool.query(
-          `INSERT INTO asset_data (symbol, date, open, high, low, close, volume)
-           VALUES ($1, $2, $3, $3, $3, $3, $4)
-           ON CONFLICT (symbol, date) DO UPDATE SET
+          `INSERT INTO asset_data (symbol, date, timestamp, open, high, low, close, volume, adjusted_close)
+           VALUES ($1, $2, NULL, $3, $3, $3, $3, $4, $3)
+           ON CONFLICT (symbol, date, COALESCE(timestamp, '1970-01-01 00:00:00'::timestamp)) DO UPDATE SET
            close = EXCLUDED.close,
            open = EXCLUDED.open,
            high = EXCLUDED.high,
            low = EXCLUDED.low,
            volume = EXCLUDED.volume,
-           updated_at = CURRENT_TIMESTAMP`,
+           adjusted_close = EXCLUDED.close`,
           [symbol, today, crypto.price, crypto.volume24h]
         );
         
@@ -301,4 +307,5 @@ module.exports = {
   getCryptoMarketData,
   buildApiUrl
 };
+
 

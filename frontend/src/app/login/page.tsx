@@ -28,8 +28,29 @@ export default function LoginPage() {
       const data = await response.json();
 
       if (response.ok) {
-        localStorage.setItem('authToken', data.token);
-        router.push('/dashboard');
+        // Check if user is banned or restricted
+        if (data.user.is_banned || data.user.is_restricted) {
+          // Still store token and user data so they can access support page
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data.user));
+          router.push('/restricted');
+          return;
+        }
+
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify(data.user));
+        
+        // If user is admin, also set adminToken
+        if (data.user.is_admin || data.user.is_superuser) {
+          localStorage.setItem('adminToken', data.token);
+        }
+        
+        // Redirect admins to admin panel, regular users to dashboard
+        if (data.user.is_admin || data.user.is_superuser) {
+          router.push('/admin');
+        } else {
+          router.push('/dashboard');
+        }
       } else {
         setError(data.error || 'Login failed');
       }

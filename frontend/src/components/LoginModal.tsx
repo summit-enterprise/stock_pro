@@ -71,6 +71,19 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
           throw new Error(data.error || 'Google login failed');
         }
 
+        // Check if user is banned or restricted
+        if (data.user.is_banned || data.user.is_restricted) {
+          // Still store token and user data so they can access support page
+          if (data.token) {
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('user', JSON.stringify(data.user));
+            window.dispatchEvent(new Event('auth-change'));
+          }
+          onClose();
+          router.push('/restricted');
+          return;
+        }
+
         if (data.token) {
           localStorage.setItem('token', data.token);
           localStorage.setItem('user', JSON.stringify(data.user));
@@ -121,6 +134,19 @@ export default function LoginModal({ isOpen, onClose }: LoginModalProps) {
 
       if (!response.ok) {
         throw new Error(data.error || 'Login failed');
+      }
+
+      // Check if user is banned or restricted
+      if (data.user.is_banned || data.user.is_restricted) {
+        // Still store token and user data so they can access support page
+        if (data.token) {
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data.user));
+          window.dispatchEvent(new Event('auth-change'));
+        }
+        onClose();
+        router.push('/restricted');
+        return;
       }
 
       // Store token
